@@ -1,0 +1,12 @@
+.env
+cookie.txt
+state.json
+downloads/
+.browser-profile/
+.run.lock
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+*.log
