@@ -144,7 +144,9 @@ The watcher then:
 1. Pages through the inbox until it reaches a section already recorded in
    `state.json`.
 2. Downloads attachments to the account's download directory using a stable
-   name containing both communication and document IDs.
+   name. When the portal response includes them, filenames are prefixed with
+   the message date, sender, and title, followed by communication and document
+   IDs for uniqueness.
 3. Atomically records each fully completed message in that account's
    `state.json`.
 

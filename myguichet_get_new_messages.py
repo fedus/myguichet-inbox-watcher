@@ -7,6 +7,7 @@ import mimetypes
 import re
 import sys
 import argparse
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,47 @@ from storage import (
 
 REQUESTS_PER_PAGE = 100
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
+TITLE_FIELD_NAMES = {
+    "communicationlabel",
+    "communicationsubject",
+    "label",
+    "libelle",
+    "messageobject",
+    "messagesubject",
+    "objet",
+    "object",
+    "subject",
+    "title",
+}
+SENDER_FIELD_NAMES = {
+    "author",
+    "emetteur",
+    "emitter",
+    "expediteur",
+    "expeditor",
+    "issuer",
+    "sender",
+    "senderdisplayname",
+    "sendername",
+}
+NESTED_TEXT_FIELD_NAMES = {
+    "displayname",
+    "label",
+    "libelle",
+    "name",
+    "title",
+}
+DATE_FIELD_NAMES = {
+    "communicationdate",
+    "creationdate",
+    "date",
+    "depositdate",
+    "emissiondate",
+    "publisheddate",
+    "receiveddate",
+    "sentdate",
+    "sendingdate",
+}
 
 
 class StateError(RuntimeError):
@@ -158,21 +200,123 @@ def safe_filename(value: object, maximum_length: int = 120) -> str:
     return text[:maximum_length].rstrip(". ") or "document"
 
 
+def normalized_field_name(value: object) -> str:
+    """Return a loose key name for matching portal metadata fields."""
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def metadata_values(value: object, field_names: set[str]) -> list[object]:
+    """Collect values for matching keys anywhere in a portal metadata object."""
+    matches: list[object] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if normalized_field_name(key) in field_names:
+                matches.append(item)
+            matches.extend(metadata_values(item, field_names))
+    elif isinstance(value, list):
+        for item in value:
+            matches.extend(metadata_values(item, field_names))
+    return matches
+
+
+def metadata_text(*sources: object, field_names: set[str]) -> str:
+    """Return the first useful short string found in portal metadata."""
+    for source in sources:
+        for value in metadata_values(source, field_names):
+            if isinstance(value, str):
+                text = value.strip()
+                if text:
+                    return text
+            elif isinstance(value, (int, float)):
+                return str(value)
+            elif isinstance(value, dict):
+                text = metadata_text(value, field_names=NESTED_TEXT_FIELD_NAMES)
+                if text:
+                    return text
+    return ""
+
+
+def parse_portal_date(value: str) -> datetime | None:
+    """Parse common portal/API date formats into a datetime."""
+    text = value.strip()
+    if not text:
+        return None
+    if text.isdigit():
+        timestamp = int(text)
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp // 1000
+        try:
+            return datetime.fromtimestamp(timestamp, timezone.utc)
+        except (OSError, ValueError):
+            return None
+    for candidate in (text, text.replace("Z", "+00:00")):
+        try:
+            return datetime.fromisoformat(candidate)
+        except ValueError:
+            pass
+    for date_format in (
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y %H:%M",
+        "%d/%m/%Y",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.strptime(text, date_format)
+        except ValueError:
+            pass
+    try:
+        return parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def metadata_date(*sources: object) -> str:
+    """Return a stable filename timestamp from portal metadata if available."""
+    for source in sources:
+        for value in metadata_values(source, DATE_FIELD_NAMES):
+            if isinstance(value, (int, float)):
+                parsed = parse_portal_date(str(int(value)))
+            elif isinstance(value, str):
+                parsed = parse_portal_date(value)
+            else:
+                parsed = None
+            if parsed is not None:
+                return parsed.strftime("%Y-%m-%d_%H%M%S")
+    return ""
+
+
+def attachment_name_prefix(
+    communication_id: str, metadata: dict[str, Any], detail: dict[str, Any]
+) -> str:
+    """Build a descriptive, bounded prefix from message metadata."""
+    components = [
+        metadata_date(metadata, detail),
+        metadata_text(detail, metadata, field_names=SENDER_FIELD_NAMES),
+        metadata_text(detail, metadata, field_names=TITLE_FIELD_NAMES),
+        communication_id,
+    ]
+    return "_".join(safe_filename(component, 60) for component in components if component)
+
+
 def attachment_path(
     account: AccountConfig,
     communication_id: str,
     document_id: str,
     original_name: object,
     content_type: str,
+    metadata: dict[str, Any],
+    detail: dict[str, Any],
 ) -> Path:
     """Build a stable, collision-resistant private attachment destination."""
     filename = safe_filename(original_name)
     extension = mimetypes.guess_extension(content_type.split(";", 1)[0].strip()) or ""
     if extension and not filename.lower().endswith(extension.lower()):
         filename += extension
+    prefix = attachment_name_prefix(communication_id, metadata, detail)
     return (
         account.download_dir
-        / f"{safe_filename(communication_id, 32)}_{safe_filename(document_id, 32)}_{filename}"
+        / f"{prefix}_{safe_filename(document_id, 32)}_{filename}"
     )
 
 
@@ -214,7 +358,10 @@ def write_attachment(response: Response, destination: Path, maximum_bytes: int) 
 
 
 def download_attachments(
-    account: AccountConfig, client: MyGuichetClient, communication_id: str
+    account: AccountConfig,
+    client: MyGuichetClient,
+    communication_id: str,
+    metadata: dict[str, Any],
 ) -> int:
     """Download all attachments for one message before it is marked as seen."""
     detail = client.get_edelivery(communication_id)
@@ -241,6 +388,8 @@ def download_attachments(
             str(document_id),
             original_name,
             response.headers.get("Content-Type", ""),
+            metadata,
+            detail,
         )
         write_attachment(response, destination, maximum_bytes)
         downloaded += 1
@@ -261,8 +410,10 @@ def run_poll(account: AccountConfig) -> int:
             print(f"[{account.name}] No new messages.")
             return 0
 
-        for communication_id, _metadata in messages:
-            attachment_count = download_attachments(account, client, communication_id)
+        for communication_id, metadata in messages:
+            attachment_count = download_attachments(
+                account, client, communication_id, metadata
+            )
             seen.add(communication_id)
             state["seen_ids"] = sorted(seen)
             state["last_run"] = utc_now()

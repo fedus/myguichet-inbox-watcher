@@ -79,6 +79,46 @@ class WatcherHelpersTest(unittest.TestCase):
     def test_safe_filename_removes_path_characters_and_controls(self) -> None:
         self.assertEqual(watcher.safe_filename(" ../a/b\\c\x00.pdf "), "_a_b_c_.pdf")
 
+    def test_attachment_path_uses_message_metadata_when_available(self) -> None:
+        account = fake_account(Path("/tmp/account"))
+        metadata = {
+            "sentDate": "29/07/2026 12:15:59",
+            "sender": {"name": "Caisse nationale de santé"},
+            "subject": "Détail de remboursement",
+        }
+        detail = {"attachmentList": []}
+
+        path = watcher.attachment_path(
+            account,
+            "987654",
+            "123456",
+            "document.pdf",
+            "application/pdf",
+            metadata,
+            detail,
+        )
+
+        self.assertEqual(
+            path.name,
+            "2026-07-29_121559_Caisse nationale de santé_"
+            "Détail de remboursement_987654_123456_document.pdf",
+        )
+
+    def test_attachment_path_falls_back_to_ids(self) -> None:
+        account = fake_account(Path("/tmp/account"))
+
+        path = watcher.attachment_path(
+            account,
+            "987654",
+            "123456",
+            "document",
+            "application/pdf",
+            {},
+            {},
+        )
+
+        self.assertEqual(path.name, "987654_123456_document.pdf")
+
     def test_write_attachment_is_private_and_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             destination = Path(temporary_directory) / "private" / "document.pdf"
