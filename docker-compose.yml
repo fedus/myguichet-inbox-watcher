@@ -1,0 +1,26 @@
+services:
+  myguichet-watcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: myguichet-watcher
+
+    env_file:
+      - .env
+    # Set MYGUICHET_RUN_MODE=mqtt in .env to keep this container subscribed to
+    # the configured broker instead of running one poll and exiting.
+
+    volumes:
+      - myguichet-data:/app
+      - ./downloads:/app/downloads
+
+    working_dir: /app
+
+    restart: "no"
+
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  myguichet-data:

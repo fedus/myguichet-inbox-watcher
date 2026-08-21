@@ -2,6 +2,7 @@
 cookie.txt
 state.json
 downloads/
+accounts/
 .browser-profile/
 .run.lock
 .venv/

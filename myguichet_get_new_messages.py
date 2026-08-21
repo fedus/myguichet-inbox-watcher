@@ -6,6 +6,7 @@ import json
 import mimetypes
 import re
 import sys
+import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,11 +15,10 @@ from requests import RequestException, Response
 
 from client import MyGuichetClient, MyGuichetError, PortalResponseError, SessionExpired
 from config import (
-    ROOT,
+    AccountConfig,
     ConfigurationError,
-    get_language,
-    get_positive_int,
-    get_space_id,
+    get_account,
+    get_accounts,
     load_environment,
 )
 from storage import (
@@ -31,10 +31,6 @@ from storage import (
 )
 
 
-STATE_FILE = ROOT / "state.json"
-DOWNLOAD_DIR = ROOT / "downloads"
-COOKIE_FILE = ROOT / "cookie.txt"
-LOCK_FILE = ROOT / ".run.lock"
 REQUESTS_PER_PAGE = 100
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
 
@@ -47,53 +43,55 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def load_state() -> dict[str, Any]:
+def load_state(account: AccountConfig) -> dict[str, Any]:
     """Read and validate the private progress file without silently replacing it."""
-    if not STATE_FILE.exists():
+    if not account.state_file.exists():
         return {"seen_ids": []}
-    restrict_file(STATE_FILE)
+    restrict_file(account.state_file)
     try:
-        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        state = json.loads(account.state_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise StateError(
-            f"Could not read {STATE_FILE.name}; restore it from a backup or remove it intentionally."
+            f"Could not read {account.state_file}; restore it from a backup or remove it intentionally."
         ) from error
     if not isinstance(state, dict) or not isinstance(state.get("seen_ids", []), list):
-        raise StateError(f"{STATE_FILE.name} has an invalid format.")
+        raise StateError(f"{account.state_file} has an invalid format.")
     state["seen_ids"] = [str(item) for item in state["seen_ids"]]
     return state
 
 
-def save_state(state: dict[str, Any]) -> None:
+def save_state(account: AccountConfig, state: dict[str, Any]) -> None:
     """Atomically checkpoint progress after each completely handled message."""
-    atomic_write_text(STATE_FILE, json.dumps(state, indent=2, sort_keys=True) + "\n")
+    atomic_write_text(
+        account.state_file, json.dumps(state, indent=2, sort_keys=True) + "\n"
+    )
 
 
-def refresh_session() -> str:
+def refresh_session(account: AccountConfig) -> str:
     """Lazy-load Playwright only when a session is absent or expired."""
     from login_and_grab_cookie import LoginError, refresh_cookie
 
     try:
-        return refresh_cookie()
+        return refresh_cookie(account)
     except LoginError as error:
         raise RuntimeError(
-            f"Could not refresh the MyGuichet session: {error}"
+            f"Could not refresh the MyGuichet session for {account.name}: {error}"
         ) from error
 
 
-def load_cookie() -> str:
+def load_cookie(account: AccountConfig) -> str:
     """Return cookie.txt, obtaining an authenticated session when needed."""
-    if COOKIE_FILE.exists():
-        restrict_file(COOKIE_FILE)
-        cookie = COOKIE_FILE.read_text(encoding="utf-8").strip()
+    if account.cookie_file.exists():
+        restrict_file(account.cookie_file)
+        cookie = account.cookie_file.read_text(encoding="utf-8").strip()
         if cookie:
             return cookie
-    print("No usable session cookie found; starting LuxTrust login.")
-    return refresh_session()
+    print(f"[{account.name}] No usable session cookie found; starting LuxTrust login.")
+    return refresh_session(account)
 
 
-def make_client(cookie: str) -> MyGuichetClient:
-    return MyGuichetClient(cookie, get_space_id(), get_language())
+def make_client(account: AccountConfig, cookie: str) -> MyGuichetClient:
+    return MyGuichetClient(cookie, account.space_id, account.language)
 
 
 def collect_unseen_communications(
@@ -161,7 +159,11 @@ def safe_filename(value: object, maximum_length: int = 120) -> str:
 
 
 def attachment_path(
-    communication_id: str, document_id: str, original_name: object, content_type: str
+    account: AccountConfig,
+    communication_id: str,
+    document_id: str,
+    original_name: object,
+    content_type: str,
 ) -> Path:
     """Build a stable, collision-resistant private attachment destination."""
     filename = safe_filename(original_name)
@@ -169,7 +171,7 @@ def attachment_path(
     if extension and not filename.lower().endswith(extension.lower()):
         filename += extension
     return (
-        DOWNLOAD_DIR
+        account.download_dir
         / f"{safe_filename(communication_id, 32)}_{safe_filename(document_id, 32)}_{filename}"
     )
 
@@ -211,7 +213,9 @@ def write_attachment(response: Response, destination: Path, maximum_bytes: int) 
         response.close()
 
 
-def download_attachments(client: MyGuichetClient, communication_id: str) -> int:
+def download_attachments(
+    account: AccountConfig, client: MyGuichetClient, communication_id: str
+) -> int:
     """Download all attachments for one message before it is marked as seen."""
     detail = client.get_edelivery(communication_id)
     attachments = detail.get("attachmentList", [])
@@ -220,8 +224,8 @@ def download_attachments(client: MyGuichetClient, communication_id: str) -> int:
             f"Message {communication_id} has an invalid attachment list."
         )
 
-    prepare_private_directory(DOWNLOAD_DIR)
-    maximum_bytes = get_positive_int("MYGUICHET_MAX_ATTACHMENT_MB", 100) * 1024 * 1024
+    prepare_private_directory(account.download_dir)
+    maximum_bytes = account.maximum_attachment_mb * 1024 * 1024
     downloaded = 0
     for attachment in attachments:
         if not isinstance(attachment, dict):
@@ -232,6 +236,7 @@ def download_attachments(client: MyGuichetClient, communication_id: str) -> int:
         original_name = attachment.get("docName") or str(document_id)
         response = client.download_document(str(document_id), str(original_name))
         destination = attachment_path(
+            account,
             communication_id,
             str(document_id),
             original_name,
@@ -242,58 +247,91 @@ def download_attachments(client: MyGuichetClient, communication_id: str) -> int:
     return downloaded
 
 
-def run_poll() -> int:
+def run_poll(account: AccountConfig) -> int:
     """Run one polling pass using the current session cookie."""
-    state = load_state()
+    prepare_private_directory(account.runtime_dir)
+    state = load_state(account)
     seen = set(state["seen_ids"])
-    client = make_client(load_cookie())
+    client = make_client(account, load_cookie(account))
     try:
         messages = collect_unseen_communications(client, seen)
         if not messages:
             state["last_run"] = utc_now()
-            save_state(state)
-            print("No new messages.")
+            save_state(account, state)
+            print(f"[{account.name}] No new messages.")
             return 0
 
         for communication_id, _metadata in messages:
-            attachment_count = download_attachments(client, communication_id)
+            attachment_count = download_attachments(account, client, communication_id)
             seen.add(communication_id)
             state["seen_ids"] = sorted(seen)
             state["last_run"] = utc_now()
-            save_state(state)
+            save_state(account, state)
             print(
-                f"Processed message {communication_id} ({attachment_count} attachment(s))."
+                f"[{account.name}] Processed message {communication_id} "
+                f"({attachment_count} attachment(s))."
             )
         return len(messages)
     finally:
         client.close()
 
 
-def main() -> int:
-    """CLI entry point. One expired session is refreshed and retried once."""
+def poll_account(account: AccountConfig) -> int:
+    """Poll one account with locking and one expired-session refresh."""
+    with exclusive_lock(account.lock_file):
+        try:
+            return run_poll(account)
+        except SessionExpired:
+            print(
+                f"[{account.name}] Saved session expired; starting LuxTrust login "
+                "and retrying once."
+            )
+            refresh_session(account)
+            return run_poll(account)
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Download attachments for new MyGuichet inbox messages."
+    )
+    parser.add_argument(
+        "--account",
+        help="Poll one configured account. Defaults to all configured accounts.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point."""
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    total_messages = 0
+    failed = False
     try:
         load_environment()
-        with exclusive_lock(LOCK_FILE):
+        accounts = [get_account(args.account)] if args.account else get_accounts()
+        for account in accounts:
             try:
-                return run_poll()
-            except SessionExpired:
-                print(
-                    "Saved session expired; starting LuxTrust login and retrying once."
-                )
-                refresh_session()
-                return run_poll()
+                total_messages += poll_account(account)
+            except AlreadyRunning as error:
+                print(f"[{account.name}] {error}")
+            except (
+                ConfigurationError,
+                MyGuichetError,
+                OSError,
+                RuntimeError,
+                StateError,
+            ) as error:
+                print(f"[{account.name}] Watcher failed: {error}", file=sys.stderr)
+                failed = True
     except AlreadyRunning as error:
         print(str(error))
         return 0
-    except (
-        ConfigurationError,
-        MyGuichetError,
-        OSError,
-        RuntimeError,
-        StateError,
-    ) as error:
+    except ConfigurationError as error:
         print(f"Watcher failed: {error}", file=sys.stderr)
         return 1
+    if failed:
+        return 1
+    return total_messages
 
 
 if __name__ == "__main__":

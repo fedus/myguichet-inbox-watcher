@@ -1,0 +1,7 @@
+.env
+.browser-profile/
+cookie.txt
+state.json
+downloads/
+accounts/
+.run.lock

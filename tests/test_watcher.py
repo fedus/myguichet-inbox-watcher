@@ -14,7 +14,10 @@ WATCHER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WATCHER_ROOT))
 
 import myguichet_get_new_messages as watcher  # noqa: E402
+import mqtt_trigger  # noqa: E402
+import config  # noqa: E402
 from client import PortalResponseError  # noqa: E402
+from config import AccountConfig  # noqa: E402
 
 
 class FakeResponse:
@@ -51,6 +54,25 @@ class FakeClient:
 
 def communication(communication_id: int) -> dict[str, object]:
     return {"eDeliveryCommunicationHitDto": {"id": communication_id}}
+
+
+def fake_account(root: Path) -> AccountConfig:
+    return AccountConfig(
+        name="alice",
+        luxtrust_username="alice-user",
+        luxtrust_password="secret",
+        space_id="123",
+        language="fr",
+        headless=True,
+        login_timeout_seconds=300,
+        maximum_attachment_mb=100,
+        download_dir=root / "downloads",
+        runtime_dir=root,
+        cookie_file=root / "cookie.txt",
+        state_file=root / "state.json",
+        profile_dir=root / ".browser-profile",
+        lock_file=root / ".run.lock",
+    )
 
 
 class WatcherHelpersTest(unittest.TestCase):
@@ -112,9 +134,9 @@ class WatcherHelpersTest(unittest.TestCase):
         )
         self.assertEqual(client.requested_pages, [1, 2])
 
-    def test_main_refreshes_an_expired_session_once_then_retries(self) -> None:
+    def test_poll_account_refreshes_an_expired_session_once_then_retries(self) -> None:
+        account = fake_account(Path("/tmp/account"))
         with (
-            patch.object(watcher, "load_environment"),
             patch.object(watcher, "exclusive_lock", return_value=nullcontext()),
             patch("builtins.print"),
             patch.object(
@@ -124,18 +146,57 @@ class WatcherHelpersTest(unittest.TestCase):
             ) as run_poll,
             patch.object(watcher, "refresh_session") as refresh_session,
         ):
-            self.assertEqual(watcher.main(), 2)
+            self.assertEqual(watcher.poll_account(account), 2)
 
         self.assertEqual(run_poll.call_count, 2)
-        refresh_session.assert_called_once_with()
+        refresh_session.assert_called_once_with(account)
 
     def test_corrupt_state_is_not_silently_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_file = Path(temporary_directory) / "state.json"
             state_file.write_text("not json", encoding="utf-8")
-            with patch.object(watcher, "STATE_FILE", state_file):
-                with self.assertRaises(watcher.StateError):
-                    watcher.load_state()
+            account = fake_account(Path(temporary_directory))
+            with self.assertRaises(watcher.StateError):
+                watcher.load_state(account)
+
+    def test_multi_account_config_uses_per_account_downloads(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            environment = {
+                "MYGUICHET_ACCOUNTS": "alice,bob",
+                "MYGUICHET_ALICE_LUXTRUST_USERNAME": "alice-user",
+                "MYGUICHET_ALICE_LUXTRUST_PASSWORD": "alice-password",
+                "MYGUICHET_ALICE_SPACE_ID": "123",
+                "MYGUICHET_ALICE_DOWNLOAD_DIR": str(root / "alice-docs"),
+                "MYGUICHET_BOB_LUXTRUST_USERNAME": "bob-user",
+                "MYGUICHET_BOB_LUXTRUST_PASSWORD": "bob-password",
+                "MYGUICHET_BOB_SPACE_ID": "456",
+                "MYGUICHET_BOB_DOWNLOAD_DIR": str(root / "bob-docs"),
+            }
+            with patch.dict("os.environ", environment, clear=True):
+                with patch.object(config, "ROOT", root):
+                    alice, bob = config.get_accounts()
+
+            self.assertEqual(alice.name, "alice")
+            self.assertEqual(alice.download_dir, root / "alice-docs")
+            self.assertEqual(
+                alice.cookie_file, root / "accounts" / "alice" / "cookie.txt"
+            )
+            self.assertEqual(bob.name, "bob")
+            self.assertEqual(bob.download_dir, root / "bob-docs")
+
+    def test_mqtt_trigger_payload_selects_accounts(self) -> None:
+        self.assertIsNone(mqtt_trigger.parse_trigger_payload("").account_names)
+        self.assertIsNone(mqtt_trigger.parse_trigger_payload("all").account_names)
+        self.assertEqual(
+            mqtt_trigger.parse_trigger_payload("alice").account_names, ["alice"]
+        )
+        self.assertEqual(
+            mqtt_trigger.parse_trigger_payload(
+                '{"accounts":["alice","bob"]}'
+            ).account_names,
+            ["alice", "bob"],
+        )
 
 
 if __name__ == "__main__":
