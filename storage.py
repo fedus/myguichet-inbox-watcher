@@ -29,6 +29,14 @@ def ensure_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def prepare_output_directory(path: Path, mode: int) -> None:
+    """Create an output directory without chmodding an existing mount."""
+    exists = path.exists()
+    path.mkdir(parents=True, exist_ok=True)
+    if not exists:
+        path.chmod(mode)
+
+
 def restrict_file(path: Path, mode: int = 0o600) -> None:
     """Restrict an existing private file if it is present."""
     if path.exists():

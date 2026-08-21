@@ -27,6 +27,7 @@ from storage import (
     atomic_binary_writer,
     atomic_write_text,
     exclusive_lock,
+    prepare_output_directory,
     prepare_private_directory,
     restrict_file,
 )
@@ -320,7 +321,9 @@ def attachment_path(
     )
 
 
-def write_attachment(response: Response, destination: Path, maximum_bytes: int) -> None:
+def write_attachment(
+    response: Response, destination: Path, maximum_bytes: int, file_mode: int = 0o600
+) -> None:
     """Stream one attachment into an atomic private file, enforcing a size cap."""
     try:
         content_length = response.headers.get("Content-Length")
@@ -334,7 +337,7 @@ def write_attachment(response: Response, destination: Path, maximum_bytes: int) 
                 pass
 
         total_bytes = 0
-        with atomic_binary_writer(destination) as output:
+        with atomic_binary_writer(destination, mode=file_mode) as output:
             try:
                 for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
                     if not chunk:
@@ -371,7 +374,7 @@ def download_attachments(
             f"Message {communication_id} has an invalid attachment list."
         )
 
-    prepare_private_directory(account.download_dir)
+    prepare_output_directory(account.download_dir, account.download_dir_mode)
     maximum_bytes = account.maximum_attachment_mb * 1024 * 1024
     downloaded = 0
     for attachment in attachments:
@@ -391,7 +394,9 @@ def download_attachments(
             metadata,
             detail,
         )
-        write_attachment(response, destination, maximum_bytes)
+        write_attachment(
+            response, destination, maximum_bytes, file_mode=account.download_file_mode
+        )
         downloaded += 1
     return downloaded
 

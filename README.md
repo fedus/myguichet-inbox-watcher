@@ -70,6 +70,9 @@ MYGUICHET_HEADLESS=true
 MYGUICHET_LANGUAGE=fr
 MYGUICHET_SPACE_ID=your-space-id
 MYGUICHET_DOWNLOAD_DIR=downloads
+# Optional output modes; defaults are private.
+MYGUICHET_DOWNLOAD_FILE_MODE=0600
+MYGUICHET_DOWNLOAD_DIR_MODE=0700
 ```
 
 For more than one login, set `MYGUICHET_ACCOUNTS` and define each account with
@@ -83,6 +86,7 @@ MYGUICHET_ALICE_LUXTRUST_USERNAME=alice-user-id
 MYGUICHET_ALICE_LUXTRUST_PASSWORD=alice-password
 MYGUICHET_ALICE_SPACE_ID=alice-space-id
 MYGUICHET_ALICE_DOWNLOAD_DIR=/srv/myguichet/alice
+MYGUICHET_ALICE_DOWNLOAD_FILE_MODE=0644
 
 MYGUICHET_BOB_LUXTRUST_USERNAME=bob-user-id
 MYGUICHET_BOB_LUXTRUST_PASSWORD=bob-password
@@ -105,6 +109,14 @@ single-account setup continues to use the repository root for those files.
 Per-account downloads default to `downloads/<account>/` when
 `MYGUICHET_ACCOUNTS` is set, but `MYGUICHET_<ACCOUNT>_DOWNLOAD_DIR` can point to
 any private absolute path or a path relative to this repository.
+
+Existing download directories are not chmodded. This matters for Docker bind
+mounts and NFS shares such as a Paperless-ngx consume folder: set the folder
+permissions/ownership on the host, then choose a downloaded file mode that the
+consumer can read. For Paperless, `MYGUICHET_<ACCOUNT>_DOWNLOAD_FILE_MODE=0644`
+is often enough when both containers share the same mounted directory. If the
+watcher must create the directory itself, `MYGUICHET_<ACCOUNT>_DOWNLOAD_DIR_MODE`
+sets the mode for that newly created directory.
 
 Optional safety settings:
 
@@ -264,10 +276,11 @@ loginctl enable-linger "$USER"
 ## Security and troubleshooting
 
 Treat `.env`, `cookie.txt`, `.browser-profile/`, `state.json`, `accounts/`, and
-`downloads/` as private data. The scripts set restrictive permissions for new
-or used files (`0600`) and directories (`0700`), but a dedicated OS user and
-encrypted backups are still good practice. Do not commit, email, or place these
-files in unencrypted shared storage.
+`downloads/` as private data unless you intentionally point downloads at a
+shared consume folder. Runtime files remain private (`0600` files and `0700`
+directories). Download output defaults to private modes too, but can be relaxed
+with `MYGUICHET_DOWNLOAD_FILE_MODE`, `MYGUICHET_DOWNLOAD_DIR_MODE`, or their
+per-account equivalents for integrations such as Paperless-ngx.
 
 - **`Browser executable not found`** — run the Playwright Chromium install
   command using the same `.venv/bin/python` interpreter as the watcher.

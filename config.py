@@ -42,6 +42,8 @@ class AccountConfig:
     headless: bool
     login_timeout_seconds: int
     maximum_attachment_mb: int
+    download_file_mode: int
+    download_dir_mode: int
     download_dir: Path
     runtime_dir: Path
     cookie_file: Path
@@ -165,6 +167,22 @@ def get_positive_int(name: str, default: int) -> int:
     return result
 
 
+def get_octal_mode(name: str, default: int) -> int:
+    """Read a Unix permission mode such as 0600 or 0644."""
+    value = os.environ.get(name, oct(default)).strip()
+    try:
+        result = int(value, 8)
+    except ValueError as error:
+        raise ConfigurationError(
+            f"{name} must be an octal Unix permission mode, such as 0600 or 0644."
+        ) from error
+    if result < 0 or result > 0o777:
+        raise ConfigurationError(
+            f"{name} must be an octal Unix permission mode between 0000 and 0777."
+        )
+    return result
+
+
 def _get_account_positive_int(
     account_name: str, key: str, global_name: str, default: int
 ) -> int:
@@ -181,6 +199,26 @@ def _get_account_positive_int(
             raise ConfigurationError(f"{variable} must be a positive integer.")
         return result
     return get_positive_int(global_name, default)
+
+
+def _get_account_octal_mode(
+    account_name: str, key: str, global_name: str, default: int
+) -> int:
+    variable = f"{_account_prefix(account_name)}{key}"
+    if variable in os.environ:
+        value = os.environ[variable].strip()
+        try:
+            result = int(value, 8)
+        except ValueError as error:
+            raise ConfigurationError(
+                f"{variable} must be an octal Unix permission mode, such as 0600 or 0644."
+            ) from error
+        if result < 0 or result > 0o777:
+            raise ConfigurationError(
+                f"{variable} must be an octal Unix permission mode between 0000 and 0777."
+            )
+        return result
+    return get_octal_mode(global_name, default)
 
 
 def _validate_language(language: str, variable: str) -> str:
@@ -222,6 +260,8 @@ def _legacy_account() -> AccountConfig:
         headless=get_bool("MYGUICHET_HEADLESS", default=False),
         login_timeout_seconds=get_positive_int("MYGUICHET_LOGIN_TIMEOUT_SECONDS", 300),
         maximum_attachment_mb=get_positive_int("MYGUICHET_MAX_ATTACHMENT_MB", 100),
+        download_file_mode=get_octal_mode("MYGUICHET_DOWNLOAD_FILE_MODE", 0o600),
+        download_dir_mode=get_octal_mode("MYGUICHET_DOWNLOAD_DIR_MODE", 0o700),
         download_dir=download_dir,
         runtime_dir=ROOT,
         cookie_file=ROOT / "cookie.txt",
@@ -275,6 +315,18 @@ def get_account(name: str) -> AccountConfig:
             "MAX_ATTACHMENT_MB",
             "MYGUICHET_MAX_ATTACHMENT_MB",
             100,
+        ),
+        download_file_mode=_get_account_octal_mode(
+            account_name,
+            "DOWNLOAD_FILE_MODE",
+            "MYGUICHET_DOWNLOAD_FILE_MODE",
+            0o600,
+        ),
+        download_dir_mode=_get_account_octal_mode(
+            account_name,
+            "DOWNLOAD_DIR_MODE",
+            "MYGUICHET_DOWNLOAD_DIR_MODE",
+            0o700,
         ),
         download_dir=_path_value(
             _account_env(account_name, "DOWNLOAD_DIR", ""),

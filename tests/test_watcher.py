@@ -66,6 +66,8 @@ def fake_account(root: Path) -> AccountConfig:
         headless=True,
         login_timeout_seconds=300,
         maximum_attachment_mb=100,
+        download_file_mode=0o600,
+        download_dir_mode=0o700,
         download_dir=root / "downloads",
         runtime_dir=root,
         cookie_file=root / "cookie.txt",
@@ -129,6 +131,18 @@ class WatcherHelpersTest(unittest.TestCase):
             self.assertEqual(destination.read_bytes(), b"part onepart two")
             self.assertTrue(response.closed)
             self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+    def test_write_attachment_can_use_shared_file_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            destination = Path(temporary_directory) / "document.pdf"
+            response = FakeResponse([b"content"])
+
+            watcher.write_attachment(
+                response, destination, maximum_bytes=1024, file_mode=0o644
+            )
+
+            self.assertEqual(destination.read_bytes(), b"content")
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o644)
 
     def test_empty_attachment_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -224,6 +238,17 @@ class WatcherHelpersTest(unittest.TestCase):
             )
             self.assertEqual(bob.name, "bob")
             self.assertEqual(bob.download_dir, root / "bob-docs")
+
+    def test_download_directory_mode_is_not_changed_when_it_already_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            existing_output = root / "paperless-consume"
+            existing_output.mkdir()
+            existing_output.chmod(0o775)
+
+            watcher.prepare_output_directory(existing_output, 0o700)
+
+            self.assertEqual(existing_output.stat().st_mode & 0o777, 0o775)
 
     def test_mqtt_trigger_payload_selects_accounts(self) -> None:
         self.assertIsNone(mqtt_trigger.parse_trigger_payload("").account_names)
