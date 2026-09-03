@@ -16,8 +16,9 @@ from playwright.sync_api import Page, sync_playwright
 from config import (
     AccountConfig,
     ConfigurationError,
-    get_account,
-    get_accounts,
+    get_myguichet_account,
+    get_source_account,
+    get_source_accounts,
     load_environment,
 )
 from storage import (
@@ -108,7 +109,7 @@ def start_luxtrust_login(page: Page, username: str, password: str) -> None:
     except PlaywrightError as error:
         raise LoginError(
             "Could not find the expected LuxTrust login controls. "
-            "The portal page may have changed; run with MYGUICHET_HEADLESS=false to inspect it."
+            "The portal page may have changed; run with the account's HEADLESS setting disabled."
         ) from error
 
 
@@ -121,7 +122,10 @@ def refresh_cookie(account: AccountConfig | None = None) -> str:
     """
     load_environment()
     if account is None:
-        account = get_account("default")
+        accounts = get_source_accounts()
+        if len(accounts) != 1:
+            raise LoginError("Use --account when more than one account is configured.")
+        account = get_myguichet_account(accounts[0])
     url = portal_url(account.language)
     prepare_private_directory(account.runtime_dir)
     prepare_private_directory(account.profile_dir)
@@ -188,14 +192,14 @@ def main(argv: list[str] | None = None) -> int:
         # Direct use of this script also needs the same protection.
         load_environment()
         if args.account:
-            account = get_account(args.account)
+            account = get_myguichet_account(get_source_account(args.account))
         else:
-            accounts = get_accounts()
+            accounts = get_source_accounts()
             if len(accounts) != 1:
                 raise LoginError(
                     "Use --account when more than one account is configured."
                 )
-            account = accounts[0]
+            account = get_myguichet_account(accounts[0])
         with exclusive_lock(account.lock_file):
             refresh_cookie(account)
     except AlreadyRunning as error:

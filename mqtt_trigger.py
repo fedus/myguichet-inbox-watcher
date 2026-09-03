@@ -9,19 +9,19 @@ import sys
 import threading
 from dataclasses import dataclass
 
-from client import MyGuichetError
 from config import (
-    AccountConfig,
     ConfigurationError,
-    get_account,
-    get_accounts,
+    get_source_account,
+    get_source_accounts,
     load_environment,
 )
+from outputs.base import OutputError
+from sources.base import SourceAccountConfig, SourceError
 from myguichet_get_new_messages import StateError, poll_account
 from storage import AlreadyRunning
 
 
-DEFAULT_TOPIC = "myguichet/poll"
+DEFAULT_TOPIC = "documents/poll"
 
 
 @dataclass(frozen=True)
@@ -33,15 +33,15 @@ class PollRequest:
 
 
 def mqtt_port() -> int:
-    raw_value = os.environ.get("MYGUICHET_MQTT_PORT", "1883").strip()
+    raw_value = os.environ.get("DOCUMENT_MQTT_PORT", "1883").strip()
     try:
         port = int(raw_value)
     except ValueError as error:
         raise ConfigurationError(
-            "MYGUICHET_MQTT_PORT must be a positive integer."
+            "DOCUMENT_MQTT_PORT must be a positive integer."
         ) from error
     if port <= 0:
-        raise ConfigurationError("MYGUICHET_MQTT_PORT must be a positive integer.")
+        raise ConfigurationError("DOCUMENT_MQTT_PORT must be a positive integer.")
     return port
 
 
@@ -77,14 +77,14 @@ def parse_trigger_payload(payload: str) -> PollRequest:
     )
 
 
-def resolve_accounts(request: PollRequest) -> list[AccountConfig]:
+def resolve_accounts(request: PollRequest) -> list[SourceAccountConfig]:
     if request.account_names is None:
-        return get_accounts()
-    return [get_account(name) for name in request.account_names]
+        return get_source_accounts()
+    return [get_source_account(name) for name in request.account_names]
 
 
 def publish_status(client: object, status: str) -> None:
-    topic = os.environ.get("MYGUICHET_MQTT_STATUS_TOPIC", "").strip()
+    topic = os.environ.get("DOCUMENT_MQTT_STATUS_TOPIC", "").strip()
     if topic:
         client.publish(topic, status)  # type: ignore[attr-defined]
 
@@ -109,7 +109,8 @@ def worker(client: object, jobs: "queue.Queue[PollRequest]") -> None:
                     print(f"[{account.name}] {error}")
                 except (
                     ConfigurationError,
-                    MyGuichetError,
+                    OutputError,
+                    SourceError,
                     OSError,
                     RuntimeError,
                     StateError,
@@ -132,7 +133,7 @@ def make_client() -> object:
         ) from error
 
     client_id = os.environ.get(
-        "MYGUICHET_MQTT_CLIENT_ID", "myguichet-inbox-watcher"
+        "DOCUMENT_MQTT_CLIENT_ID", "document-inbox-watcher"
     ).strip()
     try:
         return mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
@@ -142,17 +143,17 @@ def make_client() -> object:
 
 def main() -> int:
     load_environment()
-    host = os.environ.get("MYGUICHET_MQTT_HOST", "").strip()
+    host = os.environ.get("DOCUMENT_MQTT_HOST", "").strip()
     if not host:
-        print("MQTT trigger failed: MYGUICHET_MQTT_HOST is not set.", file=sys.stderr)
+        print("MQTT trigger failed: DOCUMENT_MQTT_HOST is not set.", file=sys.stderr)
         return 1
-    topic = os.environ.get("MYGUICHET_MQTT_TOPIC", DEFAULT_TOPIC).strip()
+    topic = os.environ.get("DOCUMENT_MQTT_TOPIC", DEFAULT_TOPIC).strip()
     topic = topic or DEFAULT_TOPIC
 
     try:
         client = make_client()
-        username = os.environ.get("MYGUICHET_MQTT_USERNAME", "")
-        password = os.environ.get("MYGUICHET_MQTT_PASSWORD", "")
+        username = os.environ.get("DOCUMENT_MQTT_USERNAME", "")
+        password = os.environ.get("DOCUMENT_MQTT_PASSWORD", "")
         if username:
             client.username_pw_set(  # type: ignore[attr-defined]
                 username, password or None

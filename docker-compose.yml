@@ -8,7 +8,7 @@ services:
 
     env_file:
       - .env
-    # Set MYGUICHET_RUN_MODE=mqtt in .env to keep this container subscribed to
+    # Set DOCUMENT_RUN_MODE=mqtt in .env to keep this container subscribed to
     # the configured broker instead of running one poll and exiting.
 
     volumes:

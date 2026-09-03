@@ -14,10 +14,21 @@ WATCHER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WATCHER_ROOT))
 
 import myguichet_get_new_messages as watcher  # noqa: E402
+import watcher_core  # noqa: E402
 import mqtt_trigger  # noqa: E402
 import config  # noqa: E402
 from client import PortalResponseError  # noqa: E402
 from config import AccountConfig  # noqa: E402
+from outputs import register_output  # noqa: E402
+from outputs.base import LocalDocument, OutputConfig, OutputError  # noqa: E402
+from sources import register_source  # noqa: E402
+from sources.base import (  # noqa: E402
+    SourceAccountConfig,
+    SourceDocument,
+    SourceError,
+    SourceMessage,
+    SourceResponseError,
+)
 
 
 class FakeResponse:
@@ -52,6 +63,92 @@ class FakeClient:
             raise AssertionError("Unexpected page size")
 
 
+class PartlyFailingSource:
+    name = "partly_failing"
+
+    def collect_unseen(
+        self, account: SourceAccountConfig, seen: set[str]
+    ) -> list[SourceMessage]:
+        del account, seen
+        return [SourceMessage("1"), SourceMessage("2")]
+
+    def list_documents(
+        self, account: SourceAccountConfig, message: SourceMessage
+    ) -> list[SourceDocument]:
+        del account
+        if message.id == "1":
+            raise SourceResponseError("temporary source failure")
+        return [SourceDocument("doc-2", "document.txt", "text/plain")]
+
+    def open_document(
+        self,
+        account: SourceAccountConfig,
+        message: SourceMessage,
+        document: SourceDocument,
+    ) -> FakeResponse:
+        del account, message, document
+        return FakeResponse([b"downloaded"], "text/plain")
+
+    def refresh_authentication(self, account: SourceAccountConfig) -> None:
+        del account
+
+    def close(self) -> None:
+        pass
+
+
+class AlwaysFailingOutput:
+    name = "always_failing"
+
+    def deliver(
+        self,
+        account: SourceAccountConfig,
+        config: OutputConfig,
+        message: SourceMessage,
+        document: SourceDocument,
+        local_document: LocalDocument,
+    ) -> None:
+        del account, config, message, document, local_document
+        raise OutputError("output refused document")
+
+    def close(self) -> None:
+        pass
+
+
+class ExpiringSource:
+    name = "expiring"
+    refreshed = False
+
+    def collect_unseen(
+        self, account: SourceAccountConfig, seen: set[str]
+    ) -> list[SourceMessage]:
+        del account, seen
+        if not ExpiringSource.refreshed:
+            raise watcher.SourceSessionExpired("expired")
+        return []
+
+    def list_documents(
+        self, account: SourceAccountConfig, message: SourceMessage
+    ) -> list[SourceDocument]:
+        del account, message
+        return []
+
+    def open_document(
+        self,
+        account: SourceAccountConfig,
+        message: SourceMessage,
+        document: SourceDocument,
+    ) -> FakeResponse:
+        del account, message, document
+        return FakeResponse([b"content"])
+
+    def refresh_authentication(self, account: SourceAccountConfig) -> None:
+        del account
+        ExpiringSource.refreshed = True
+
+    def close(self) -> None:
+        pass
+
+
 def communication(communication_id: int) -> dict[str, object]:
     return {"eDeliveryCommunicationHitDto": {"id": communication_id}}
 
@@ -65,15 +162,36 @@ def fake_account(root: Path) -> AccountConfig:
         language="fr",
         headless=True,
         login_timeout_seconds=300,
-        maximum_attachment_mb=100,
-        download_file_mode=0o600,
-        download_dir_mode=0o700,
-        download_dir=root / "downloads",
         runtime_dir=root,
         cookie_file=root / "cookie.txt",
-        state_file=root / "state.json",
         profile_dir=root / ".browser-profile",
         lock_file=root / ".run.lock",
+    )
+
+
+def fake_source_account(
+    root: Path, output_configs: tuple[OutputConfig, ...] | None = None
+) -> SourceAccountConfig:
+    if output_configs is None:
+        output_configs = (
+            OutputConfig(
+                "folder",
+                "folder",
+                {
+                    "directory": root / "downloads",
+                    "file_mode": 0o600,
+                    "dir_mode": 0o700,
+                },
+            ),
+        )
+    return SourceAccountConfig(
+        name="alice",
+        source="partly_failing",
+        maximum_document_mb=100,
+        runtime_dir=root,
+        state_file=root / "state.json",
+        lock_file=root / ".run.lock",
+        output_configs=output_configs,
     )
 
 
@@ -82,7 +200,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(watcher.safe_filename(" ../a/b\\c\x00.pdf "), "_a_b_c_.pdf")
 
     def test_attachment_path_uses_message_metadata_when_available(self) -> None:
-        account = fake_account(Path("/tmp/account"))
+        account = fake_source_account(Path("/tmp/account"))
         metadata = {
             "sentDate": "29/07/2026 12:15:59",
             "sender": {"name": "Caisse nationale de santé"},
@@ -107,7 +225,7 @@ class WatcherHelpersTest(unittest.TestCase):
         )
 
     def test_attachment_path_falls_back_to_ids(self) -> None:
-        account = fake_account(Path("/tmp/account"))
+        account = fake_source_account(Path("/tmp/account"))
 
         path = watcher.attachment_path(
             account,
@@ -189,55 +307,178 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(client.requested_pages, [1, 2])
 
     def test_poll_account_refreshes_an_expired_session_once_then_retries(self) -> None:
-        account = fake_account(Path("/tmp/account"))
+        ExpiringSource.refreshed = False
+        register_source("expiring", ExpiringSource)
         with (
-            patch.object(watcher, "exclusive_lock", return_value=nullcontext()),
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch.object(watcher_core, "exclusive_lock", return_value=nullcontext()),
             patch("builtins.print"),
-            patch.object(
-                watcher,
-                "run_poll",
-                side_effect=[watcher.SessionExpired("expired"), 2],
-            ) as run_poll,
-            patch.object(watcher, "refresh_session") as refresh_session,
         ):
-            self.assertEqual(watcher.poll_account(account), 2)
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice",
+                source="expiring",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+            )
+            self.assertEqual(watcher_core.poll_account(account), 0)
 
-        self.assertEqual(run_poll.call_count, 2)
-        refresh_session.assert_called_once_with(account)
+        self.assertTrue(ExpiringSource.refreshed)
 
     def test_corrupt_state_is_not_silently_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_file = Path(temporary_directory) / "state.json"
             state_file.write_text("not json", encoding="utf-8")
-            account = fake_account(Path(temporary_directory))
+            account = fake_source_account(Path(temporary_directory))
             with self.assertRaises(watcher.StateError):
                 watcher.load_state(account)
 
-    def test_multi_account_config_uses_per_account_downloads(self) -> None:
+    def test_document_accounts_are_required(self) -> None:
+        with patch.dict("os.environ", {"MYGUICHET_ACCOUNTS": "alice"}, clear=True):
+            with self.assertRaises(config.ConfigurationError):
+                config.get_source_accounts()
+
+    def test_multi_user_config_infers_source_accounts_from_plugin_prefixes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             environment = {
-                "MYGUICHET_ACCOUNTS": "alice,bob",
-                "MYGUICHET_ALICE_LUXTRUST_USERNAME": "alice-user",
-                "MYGUICHET_ALICE_LUXTRUST_PASSWORD": "alice-password",
-                "MYGUICHET_ALICE_SPACE_ID": "123",
-                "MYGUICHET_ALICE_DOWNLOAD_DIR": str(root / "alice-docs"),
-                "MYGUICHET_BOB_LUXTRUST_USERNAME": "bob-user",
-                "MYGUICHET_BOB_LUXTRUST_PASSWORD": "bob-password",
-                "MYGUICHET_BOB_SPACE_ID": "456",
-                "MYGUICHET_BOB_DOWNLOAD_DIR": str(root / "bob-docs"),
+                "DOCUMENT_USERS": "alice,bob",
+                "DOCUMENT_ALICE_MYGUICHET_LUXTRUST_USERNAME": "alice-user",
+                "DOCUMENT_ALICE_MYGUICHET_LUXTRUST_PASSWORD": "alice-password",
+                "DOCUMENT_ALICE_MYGUICHET_SPACE_ID": "123",
+                "DOCUMENT_ALICE_MYGUICHET_OUTPUT_FOLDER_DIRECTORY": str(root / "alice-docs"),
+                "DOCUMENT_BOB_MYGUICHET_LUXTRUST_USERNAME": "bob-user",
+                "DOCUMENT_BOB_MYGUICHET_LUXTRUST_PASSWORD": "bob-password",
+                "DOCUMENT_BOB_MYGUICHET_SPACE_ID": "456",
+                "DOCUMENT_BOB_MYGUICHET_OUTPUT_FOLDER_DIRECTORY": str(root / "bob-docs"),
             }
             with patch.dict("os.environ", environment, clear=True):
                 with patch.object(config, "ROOT", root):
-                    alice, bob = config.get_accounts()
+                    alice, bob = config.get_source_accounts()
 
-            self.assertEqual(alice.name, "alice")
-            self.assertEqual(alice.download_dir, root / "alice-docs")
+            self.assertEqual(alice.name, "alice_myguichet")
+            self.assertEqual(alice.source, "myguichet")
             self.assertEqual(
-                alice.cookie_file, root / "accounts" / "alice" / "cookie.txt"
+                alice.output_configs[0].settings["directory"], root / "alice-docs"
             )
-            self.assertEqual(bob.name, "bob")
-            self.assertEqual(bob.download_dir, root / "bob-docs")
+            self.assertEqual(bob.name, "bob_myguichet")
+            self.assertEqual(bob.source_settings["space_id"], "456")
+            self.assertEqual(
+                bob.output_configs[0].settings["directory"], root / "bob-docs"
+            )
+
+    def test_users_can_have_different_source_sets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            environment = {
+                "DOCUMENT_USERS": "alice,bob",
+                "DOCUMENT_ALICE_SOURCES": "myguichet",
+                "DOCUMENT_ALICE_MYGUICHET_SPACE_ID": "123",
+                "DOCUMENT_ALICE_MYGUICHET_OUTPUT_FOLDER_DIRECTORY": str(
+                    root / "alice-myguichet"
+                ),
+                "DOCUMENT_BOB_SOURCES": "myguichet,otherservice",
+                "DOCUMENT_BOB_MYGUICHET_SPACE_ID": "456",
+                "DOCUMENT_BOB_MYGUICHET_OUTPUT_FOLDER_DIRECTORY": str(
+                    root / "bob-myguichet"
+                ),
+                "DOCUMENT_BOB_OTHERSERVICE_USERNAME": "bob-other-user",
+                "DOCUMENT_BOB_OTHERSERVICE_OUTPUT_FOLDER_DIRECTORY": str(
+                    root / "bob-other"
+                ),
+            }
+            with patch.dict("os.environ", environment, clear=True):
+                with patch.object(config, "ROOT", root):
+                    accounts = config.get_source_accounts()
+
+            self.assertEqual(
+                [(account.name, account.source) for account in accounts],
+                [
+                    ("alice_myguichet", "myguichet"),
+                    ("bob_myguichet", "myguichet"),
+                    ("bob_otherservice", "otherservice"),
+                ],
+            )
+            self.assertEqual(
+                accounts[2].output_configs[0].settings["directory"],
+                root / "bob-other",
+            )
+
+    def test_document_account_config_supports_named_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            environment = {
+                "DOCUMENT_USERS": "alice",
+                "DOCUMENT_ALICE_SOURCES": "taxbox",
+                "DOCUMENT_ALICE_TAXBOX_OUTPUT_FOLDER_DIRECTORY": str(root / "taxbox-docs"),
+            }
+            with patch.dict("os.environ", environment, clear=True):
+                with patch.object(config, "ROOT", root):
+                    account = config.get_source_account("alice_taxbox")
+
+            self.assertEqual(account.name, "alice_taxbox")
+            self.assertEqual(account.source, "taxbox")
+            self.assertEqual(account.output_configs[0].type, "folder")
+            self.assertEqual(
+                account.output_configs[0].settings["directory"],
+                root / "taxbox-docs",
+            )
+            self.assertEqual(
+                account.state_file, root / "accounts" / "alice_taxbox" / "state.json"
+            )
+
+    def test_document_account_config_supports_named_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            environment = {
+                "DOCUMENT_USERS": "alice",
+                "DOCUMENT_ALICE_SOURCES": "taxbox",
+                "DOCUMENT_ALICE_TAXBOX_OUTPUTS": "paperless:folder,mailer:email",
+                "DOCUMENT_ALICE_TAXBOX_OUTPUT_PAPERLESS_DIRECTORY": str(root / "paperless"),
+                "DOCUMENT_ALICE_TAXBOX_OUTPUT_PAPERLESS_FILE_MODE": "0644",
+                "DOCUMENT_ALICE_TAXBOX_OUTPUT_MAILER_URL": "https://example.invalid/send",
+            }
+            with patch.dict("os.environ", environment, clear=True):
+                with patch.object(config, "ROOT", root):
+                    account = config.get_source_account("alice:taxbox")
+
+            paperless, mailer = account.output_configs
+            self.assertEqual((paperless.name, paperless.type), ("paperless", "folder"))
+            self.assertEqual(paperless.settings["directory"], root / "paperless")
+            self.assertEqual(paperless.settings["file_mode"], 0o644)
+            self.assertEqual((mailer.name, mailer.type), ("mailer", "email"))
+            self.assertEqual(mailer.settings["url"], "https://example.invalid/send")
+
+    def test_one_failed_message_does_not_block_later_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = fake_source_account(root)
+
+            with patch("builtins.print"):
+                with self.assertRaises(SourceError):
+                    watcher_core.run_poll(account, PartlyFailingSource())
+
+            state = watcher_core.load_state(account)
+            self.assertEqual(state["seen_ids"], ["2"])
+            downloaded = list((root / "downloads").iterdir())
+            self.assertEqual(len(downloaded), 1)
+            self.assertEqual(downloaded[0].read_bytes(), b"downloaded")
+
+    def test_output_failure_prevents_message_checkpoint(self) -> None:
+        register_output("always_failing", AlwaysFailingOutput)
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = fake_source_account(
+                root, (OutputConfig("bad", "always_failing"),)
+            )
+
+            with patch("builtins.print"):
+                with self.assertRaises(SourceError):
+                    watcher_core.run_poll(account, PartlyFailingSource())
+
+            self.assertFalse(account.state_file.exists())
 
     def test_download_directory_mode_is_not_changed_when_it_already_exists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

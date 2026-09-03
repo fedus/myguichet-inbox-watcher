@@ -9,7 +9,7 @@ fi
 
 cd /app
 
-if [ "${MYGUICHET_RUN_MODE:-poll}" = "mqtt" ]; then
+if [ "${DOCUMENT_RUN_MODE:-poll}" = "mqtt" ]; then
     exec python mqtt_trigger.py
 fi
 

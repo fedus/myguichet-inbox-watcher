@@ -16,8 +16,9 @@ from config import (
     AccountConfig,
     ConfigurationError,
     ROOT,
-    get_account,
-    get_accounts,
+    get_myguichet_account,
+    get_source_account,
+    get_source_accounts,
     load_environment,
 )
 from storage import restrict_file
@@ -70,7 +71,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     load_environment()
     try:
-        accounts = [get_account(args.account)] if args.account else get_accounts()
+        source_accounts = (
+            [get_source_account(args.account)] if args.account else get_source_accounts()
+        )
+        accounts = [get_myguichet_account(account) for account in source_accounts]
     except ConfigurationError as error:
         print(f"Probe failed: {error}", file=sys.stderr)
         return 1
