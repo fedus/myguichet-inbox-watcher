@@ -44,7 +44,7 @@ def restrict_file(path: Path, mode: int = 0o600) -> None:
 
 
 def _temporary_file(destination: Path) -> tuple[int, Path]:
-    # cookie.txt and state.json intentionally live beside the source files.
+    # Runtime files intentionally live beside the source files.
     # Restrict their file modes, but do not unexpectedly chmod the whole
     # project directory just because an atomic replacement is being written.
     ensure_directory(destination.parent)
@@ -106,7 +106,7 @@ def exclusive_lock(lock_file: Path) -> Iterator[None]:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise AlreadyRunning(
-                "Another MyGuichet watcher run is still in progress."
+                "Another document watcher run is still in progress."
             ) from error
         try:
             yield

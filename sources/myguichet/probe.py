@@ -1,9 +1,4 @@
-"""Field test: log whether the current session cookie is still accepted.
-
-Unlike myguichet_get_new_messages.py, this deliberately does NOT refresh an
-expired session. Auto-healing would hide the exact moment the original
-cookie died and corrupt the measurement.
-"""
+"""Check whether saved MyGuichet session cookies are still accepted."""
 
 from __future__ import annotations
 
@@ -11,22 +6,25 @@ import argparse
 import sys
 from datetime import datetime, timezone
 
-from client import MyGuichetClient, MyGuichetError, SessionExpired
 from config import (
-    AccountConfig,
     ConfigurationError,
     ROOT,
-    get_myguichet_account,
     get_source_account,
     get_source_accounts,
     load_environment,
 )
+from sources.myguichet.client import MyGuichetClient, MyGuichetError, SessionExpired
+from sources.myguichet.config import (
+    MyGuichetAccountConfig,
+    myguichet_account_from_source,
+)
 from storage import restrict_file
 
-LOG_FILE = ROOT / "session_probe.log"
+
+LOG_FILE = ROOT / "myguichet_session_probe.log"
 
 
-def log(account: AccountConfig, status: str) -> int:
+def log(account: MyGuichetAccountConfig, status: str) -> int:
     timestamp = datetime.now(timezone.utc).isoformat()
     line = f"{timestamp} {account.name} {status}"
     with LOG_FILE.open("a", encoding="utf-8") as handle:
@@ -46,7 +44,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def probe_account(account: AccountConfig) -> int:
+def probe_account(account: MyGuichetAccountConfig) -> int:
     if not account.cookie_file.exists():
         return log(account, "NO_COOKIE")
     restrict_file(account.cookie_file)
@@ -74,7 +72,9 @@ def main(argv: list[str] | None = None) -> int:
         source_accounts = (
             [get_source_account(args.account)] if args.account else get_source_accounts()
         )
-        accounts = [get_myguichet_account(account) for account in source_accounts]
+        accounts = [
+            myguichet_account_from_source(account) for account in source_accounts
+        ]
     except ConfigurationError as error:
         print(f"Probe failed: {error}", file=sys.stderr)
         return 1

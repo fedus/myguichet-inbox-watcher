@@ -38,13 +38,7 @@ from storage import (
 
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
 TITLE_FIELD_NAMES = {
-    "communicationlabel",
-    "communicationsubject",
     "label",
-    "libelle",
-    "messageobject",
-    "messagesubject",
-    "objet",
     "object",
     "subject",
     "title",
@@ -68,15 +62,11 @@ NESTED_TEXT_FIELD_NAMES = {
     "title",
 }
 DATE_FIELD_NAMES = {
-    "communicationdate",
     "creationdate",
     "date",
-    "depositdate",
-    "emissiondate",
     "publisheddate",
     "receiveddate",
     "sentdate",
-    "sendingdate",
 }
 
 
@@ -121,7 +111,7 @@ def safe_filename(value: object, maximum_length: int = 120) -> str:
 
 
 def normalized_field_name(value: object) -> str:
-    """Return a loose key name for matching portal metadata fields."""
+    """Return a loose key name for matching source metadata fields."""
     return re.sub(r"[^a-z0-9]", "", str(value).lower())
 
 
@@ -156,8 +146,8 @@ def metadata_text(*sources: object, field_names: set[str]) -> str:
     return ""
 
 
-def parse_portal_date(value: str) -> datetime | None:
-    """Parse common portal/API date formats into a datetime."""
+def parse_metadata_date(value: str) -> datetime | None:
+    """Parse common source metadata date formats into a datetime."""
     text = value.strip()
     if not text:
         return None
@@ -196,9 +186,9 @@ def metadata_date(*sources: object) -> str:
     for source in sources:
         for value in metadata_values(source, DATE_FIELD_NAMES):
             if isinstance(value, (int, float)):
-                parsed = parse_portal_date(str(int(value)))
+                parsed = parse_metadata_date(str(int(value)))
             elif isinstance(value, str):
-                parsed = parse_portal_date(value)
+                parsed = parse_metadata_date(value)
             else:
                 parsed = None
             if parsed is not None:
@@ -206,7 +196,7 @@ def metadata_date(*sources: object) -> str:
     return ""
 
 
-def attachment_name_prefix(
+def document_name_prefix(
     message_id: str, metadata: object, detail: object
 ) -> str:
     """Build a descriptive, bounded prefix from message metadata."""
@@ -226,42 +216,8 @@ def document_filename(message: SourceMessage, document: SourceDocument) -> str:
     extension = mimetypes.guess_extension(content_type.split(";", 1)[0].strip()) or ""
     if extension and not filename.lower().endswith(extension.lower()):
         filename += extension
-    prefix = attachment_name_prefix(message.id, message.metadata, document.metadata)
+    prefix = document_name_prefix(message.id, message.metadata, document.metadata)
     return f"{prefix}_{safe_filename(document.id, 32)}_{filename}"
-
-
-def document_path(
-    account: SourceAccountConfig, message: SourceMessage, document: SourceDocument
-) -> Path:
-    """Compatibility helper for the default folder destination."""
-    for output in account.output_configs:
-        if output.type == "folder" and "directory" in output.settings:
-            return Path(output.settings["directory"]) / document_filename(
-                message, document
-            )
-    return Path("downloads") / account.name / document_filename(message, document)
-
-
-def attachment_path(
-    account: SourceAccountConfig,
-    communication_id: str,
-    document_id: str,
-    original_name: object,
-    content_type: str,
-    metadata: dict[str, Any],
-    detail: dict[str, Any],
-) -> Path:
-    """Compatibility wrapper for older MyGuichet helper callers."""
-    return document_path(
-        account,
-        SourceMessage(id=communication_id, metadata=metadata),
-        SourceDocument(
-            id=document_id,
-            name=str(original_name),
-            content_type=content_type,
-            metadata=detail,
-        ),
-    )
 
 
 def write_document(
@@ -364,16 +320,12 @@ def stage_document(
 
 
 def default_output_configs(account: SourceAccountConfig) -> tuple[OutputConfig, ...]:
-    """Return the legacy folder output when no explicit outputs are configured."""
+    """Return the built-in folder output when no explicit outputs are configured."""
     return (
         OutputConfig(
             name="folder",
             type="folder",
-            settings={
-                "directory": Path("downloads") / account.name,
-                "file_mode": 0o600,
-                "dir_mode": 0o700,
-            },
+            settings={},
         ),
     )
 

@@ -13,22 +13,24 @@ from unittest.mock import patch
 WATCHER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WATCHER_ROOT))
 
-import myguichet_get_new_messages as watcher  # noqa: E402
 import watcher_core  # noqa: E402
 import mqtt_trigger  # noqa: E402
 import config  # noqa: E402
-from client import PortalResponseError  # noqa: E402
-from config import AccountConfig  # noqa: E402
 from outputs import register_output  # noqa: E402
 from outputs.base import LocalDocument, OutputConfig, OutputError  # noqa: E402
+from outputs.folder import FolderOutput  # noqa: E402
 from sources import register_source  # noqa: E402
+from sources.myguichet import REQUESTS_PER_PAGE, collect_unseen_communications  # noqa: E402
+from sources.myguichet.config import myguichet_account_from_source  # noqa: E402
 from sources.base import (  # noqa: E402
     SourceAccountConfig,
     SourceDocument,
     SourceError,
     SourceMessage,
     SourceResponseError,
+    SourceSessionExpired,
 )
+from storage import prepare_output_directory  # noqa: E402
 
 
 class FakeResponse:
@@ -59,7 +61,7 @@ class FakeClient:
 
     @staticmethod
     def assert_requested_page_size(per_page: int) -> None:
-        if per_page != watcher.REQUESTS_PER_PAGE:
+        if per_page != REQUESTS_PER_PAGE:
             raise AssertionError("Unexpected page size")
 
 
@@ -123,7 +125,7 @@ class ExpiringSource:
     ) -> list[SourceMessage]:
         del account, seen
         if not ExpiringSource.refreshed:
-            raise watcher.SourceSessionExpired("expired")
+            raise SourceSessionExpired("expired")
         return []
 
     def list_documents(
@@ -151,22 +153,6 @@ class ExpiringSource:
 
 def communication(communication_id: int) -> dict[str, object]:
     return {"eDeliveryCommunicationHitDto": {"id": communication_id}}
-
-
-def fake_account(root: Path) -> AccountConfig:
-    return AccountConfig(
-        name="alice",
-        luxtrust_username="alice-user",
-        luxtrust_password="secret",
-        space_id="123",
-        language="fr",
-        headless=True,
-        login_timeout_seconds=300,
-        runtime_dir=root,
-        cookie_file=root / "cookie.txt",
-        profile_dir=root / ".browser-profile",
-        lock_file=root / ".run.lock",
-    )
 
 
 def fake_source_account(
@@ -197,90 +183,75 @@ def fake_source_account(
 
 class WatcherHelpersTest(unittest.TestCase):
     def test_safe_filename_removes_path_characters_and_controls(self) -> None:
-        self.assertEqual(watcher.safe_filename(" ../a/b\\c\x00.pdf "), "_a_b_c_.pdf")
+        self.assertEqual(watcher_core.safe_filename(" ../a/b\\c\x00.pdf "), "_a_b_c_.pdf")
 
-    def test_attachment_path_uses_message_metadata_when_available(self) -> None:
-        account = fake_source_account(Path("/tmp/account"))
+    def test_document_filename_uses_message_metadata_when_available(self) -> None:
         metadata = {
             "sentDate": "29/07/2026 12:15:59",
             "sender": {"name": "Caisse nationale de santé"},
             "subject": "Détail de remboursement",
         }
-        detail = {"attachmentList": []}
-
-        path = watcher.attachment_path(
-            account,
-            "987654",
-            "123456",
-            "document.pdf",
-            "application/pdf",
-            metadata,
-            detail,
+        filename = watcher_core.document_filename(
+            SourceMessage("987654", metadata),
+            SourceDocument("123456", "document.pdf", "application/pdf", {}),
         )
 
         self.assertEqual(
-            path.name,
+            filename,
             "2026-07-29_121559_Caisse nationale de santé_"
             "Détail de remboursement_987654_123456_document.pdf",
         )
 
-    def test_attachment_path_falls_back_to_ids(self) -> None:
-        account = fake_source_account(Path("/tmp/account"))
-
-        path = watcher.attachment_path(
-            account,
-            "987654",
-            "123456",
-            "document",
-            "application/pdf",
-            {},
-            {},
+    def test_document_filename_falls_back_to_ids(self) -> None:
+        filename = watcher_core.document_filename(
+            SourceMessage("987654"),
+            SourceDocument("123456", "document", "application/pdf", {}),
         )
 
-        self.assertEqual(path.name, "987654_123456_document.pdf")
+        self.assertEqual(filename, "987654_123456_document.pdf")
 
-    def test_write_attachment_is_private_and_atomic(self) -> None:
+    def test_write_document_is_private_and_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             destination = Path(temporary_directory) / "private" / "document.pdf"
             response = FakeResponse([b"part one", b"part two"])
 
-            watcher.write_attachment(response, destination, maximum_bytes=1024)
+            watcher_core.write_document(response, destination, maximum_bytes=1024)
 
             self.assertEqual(destination.read_bytes(), b"part onepart two")
             self.assertTrue(response.closed)
             self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
 
-    def test_write_attachment_can_use_shared_file_mode(self) -> None:
+    def test_write_document_can_use_shared_file_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             destination = Path(temporary_directory) / "document.pdf"
             response = FakeResponse([b"content"])
 
-            watcher.write_attachment(
+            watcher_core.write_document(
                 response, destination, maximum_bytes=1024, file_mode=0o644
             )
 
             self.assertEqual(destination.read_bytes(), b"content")
             self.assertEqual(destination.stat().st_mode & 0o777, 0o644)
 
-    def test_empty_attachment_is_not_published(self) -> None:
+    def test_empty_document_is_not_published(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             destination = Path(temporary_directory) / "document.pdf"
             response = FakeResponse([])
 
-            with self.assertRaises(PortalResponseError):
-                watcher.write_attachment(response, destination, maximum_bytes=1024)
+            with self.assertRaises(SourceResponseError):
+                watcher_core.write_document(response, destination, maximum_bytes=1024)
 
             self.assertFalse(destination.exists())
             self.assertTrue(response.closed)
 
-    def test_oversized_attachment_is_closed_without_a_file(self) -> None:
+    def test_oversized_document_is_closed_without_a_file(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             destination = Path(temporary_directory) / "document.pdf"
             response = FakeResponse([b"small"])
             response.headers["Content-Length"] = "1000"
 
-            with self.assertRaises(PortalResponseError):
-                watcher.write_attachment(response, destination, maximum_bytes=100)
+            with self.assertRaises(SourceResponseError):
+                watcher_core.write_document(response, destination, maximum_bytes=100)
 
             self.assertFalse(destination.exists())
             self.assertTrue(response.closed)
@@ -299,7 +270,7 @@ class WatcherHelpersTest(unittest.TestCase):
             }
         )
 
-        result = watcher.collect_unseen_communications(client, seen={"1", "2"})  # type: ignore[arg-type]
+        result = collect_unseen_communications(client, seen={"1", "2"})  # type: ignore[arg-type]
 
         self.assertEqual(
             [communication_id for communication_id, _ in result], ["3", "4"]
@@ -332,8 +303,8 @@ class WatcherHelpersTest(unittest.TestCase):
             state_file = Path(temporary_directory) / "state.json"
             state_file.write_text("not json", encoding="utf-8")
             account = fake_source_account(Path(temporary_directory))
-            with self.assertRaises(watcher.StateError):
-                watcher.load_state(account)
+            with self.assertRaises(watcher_core.StateError):
+                watcher_core.load_state(account)
 
     def test_document_accounts_are_required(self) -> None:
         with patch.dict("os.environ", {"MYGUICHET_ACCOUNTS": "alice"}, clear=True):
@@ -361,12 +332,12 @@ class WatcherHelpersTest(unittest.TestCase):
             self.assertEqual(alice.name, "alice_myguichet")
             self.assertEqual(alice.source, "myguichet")
             self.assertEqual(
-                alice.output_configs[0].settings["directory"], root / "alice-docs"
+                alice.output_configs[0].settings["directory"], str(root / "alice-docs")
             )
             self.assertEqual(bob.name, "bob_myguichet")
             self.assertEqual(bob.source_settings["space_id"], "456")
             self.assertEqual(
-                bob.output_configs[0].settings["directory"], root / "bob-docs"
+                bob.output_configs[0].settings["directory"], str(root / "bob-docs")
             )
 
     def test_users_can_have_different_source_sets(self) -> None:
@@ -403,7 +374,7 @@ class WatcherHelpersTest(unittest.TestCase):
             )
             self.assertEqual(
                 accounts[2].output_configs[0].settings["directory"],
-                root / "bob-other",
+                str(root / "bob-other"),
             )
 
     def test_document_account_config_supports_named_sources(self) -> None:
@@ -423,7 +394,7 @@ class WatcherHelpersTest(unittest.TestCase):
             self.assertEqual(account.output_configs[0].type, "folder")
             self.assertEqual(
                 account.output_configs[0].settings["directory"],
-                root / "taxbox-docs",
+                str(root / "taxbox-docs"),
             )
             self.assertEqual(
                 account.state_file, root / "accounts" / "alice_taxbox" / "state.json"
@@ -446,10 +417,66 @@ class WatcherHelpersTest(unittest.TestCase):
 
             paperless, mailer = account.output_configs
             self.assertEqual((paperless.name, paperless.type), ("paperless", "folder"))
-            self.assertEqual(paperless.settings["directory"], root / "paperless")
-            self.assertEqual(paperless.settings["file_mode"], 0o644)
+            self.assertEqual(paperless.settings["directory"], str(root / "paperless"))
+            self.assertEqual(paperless.settings["file_mode"], "0644")
             self.assertEqual((mailer.name, mailer.type), ("mailer", "email"))
             self.assertEqual(mailer.settings["url"], "https://example.invalid/send")
+
+    def test_myguichet_plugin_owns_source_setting_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_myguichet",
+                source="myguichet",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+                source_settings={
+                    "luxtrust_username": "alice-user",
+                    "luxtrust_password": "secret",
+                    "space_id": "123456",
+                    "language": "de",
+                    "headless": "true",
+                    "login_timeout_seconds": "30",
+                },
+            )
+
+            myguichet = myguichet_account_from_source(account)
+
+            self.assertEqual(myguichet.space_id, "123456")
+            self.assertEqual(myguichet.language, "de")
+            self.assertTrue(myguichet.headless)
+            self.assertEqual(myguichet.login_timeout_seconds, 30)
+            self.assertEqual(myguichet.cookie_file, root / "cookie.txt")
+
+    def test_folder_plugin_owns_output_setting_parsing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            staged = root / "staged.txt"
+            staged.write_text("content", encoding="utf-8")
+            account = fake_source_account(root)
+
+            FolderOutput().deliver(
+                account,
+                OutputConfig(
+                    "local",
+                    "folder",
+                    {
+                        "directory": str(root / "out"),
+                        "file_mode": "0644",
+                        "dir_mode": "0755",
+                    },
+                ),
+                SourceMessage("1"),
+                SourceDocument("doc-1", "document.txt", "text/plain"),
+                LocalDocument(staged, "document.txt", "text/plain", staged.stat().st_size),
+            )
+
+            destination = root / "out" / "document.txt"
+            self.assertEqual(destination.read_text(encoding="utf-8"), "content")
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(destination.parent.stat().st_mode & 0o777, 0o755)
 
     def test_one_failed_message_does_not_block_later_messages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -487,7 +514,7 @@ class WatcherHelpersTest(unittest.TestCase):
             existing_output.mkdir()
             existing_output.chmod(0o775)
 
-            watcher.prepare_output_directory(existing_output, 0o700)
+            prepare_output_directory(existing_output, 0o700)
 
             self.assertEqual(existing_output.stat().st_mode & 0o777, 0o775)
 

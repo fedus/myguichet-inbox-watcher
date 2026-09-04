@@ -17,8 +17,8 @@ from config import (
 )
 from outputs.base import OutputError
 from sources.base import SourceAccountConfig, SourceError
-from myguichet_get_new_messages import StateError, poll_account
 from storage import AlreadyRunning
+from watcher_core import StateError, poll_account
 
 
 DEFAULT_TOPIC = "documents/poll"

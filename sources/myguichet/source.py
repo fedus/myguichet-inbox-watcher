@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from client import MyGuichetClient, MyGuichetError, PortalResponseError, SessionExpired
-from config import AccountConfig, get_myguichet_account
-from storage import restrict_file
 from sources.base import (
     DownloadResponse,
     SourceAccountConfig,
@@ -16,9 +13,44 @@ from sources.base import (
     SourceResponseError,
     SourceSessionExpired,
 )
+from storage import restrict_file
+
+from sources.myguichet.client import (
+    MyGuichetClient,
+    MyGuichetError,
+    PortalResponseError,
+    SessionExpired,
+)
+from sources.myguichet.config import (
+    MyGuichetAccountConfig,
+    myguichet_account_from_source,
+)
 
 
 REQUESTS_PER_PAGE = 100
+
+
+def _first_text(metadata: dict[str, Any], *keys: str) -> object:
+    for key in keys:
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _message_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "date": _first_text(
+            metadata, "sentDate", "sendingDate", "depositDate", "communicationDate"
+        ),
+        "sender": _first_text(
+            metadata, "sender", "senderName", "senderDisplayName", "expeditor"
+        ),
+        "subject": _first_text(
+            metadata, "subject", "communicationSubject", "communicationLabel", "label"
+        ),
+        "raw": metadata,
+    }
 
 
 def _source_error(error: MyGuichetError) -> SourceError:
@@ -78,20 +110,20 @@ def collect_unseen_communications(
 
 
 class MyGuichetDocumentSource:
-    """Source adapter that plugs the existing MyGuichet client into the core."""
+    """Source adapter that plugs the MyGuichet client into the core."""
 
     name = "myguichet"
 
     def __init__(self) -> None:
         self.client: MyGuichetClient | None = None
-        self.myguichet_account: AccountConfig | None = None
+        self.myguichet_account: MyGuichetAccountConfig | None = None
 
-    def _account(self, account: SourceAccountConfig) -> AccountConfig:
+    def _account(self, account: SourceAccountConfig) -> MyGuichetAccountConfig:
         if self.myguichet_account is None:
-            self.myguichet_account = get_myguichet_account(account)
+            self.myguichet_account = myguichet_account_from_source(account)
         return self.myguichet_account
 
-    def _load_cookie(self, account: AccountConfig) -> str:
+    def _load_cookie(self, account: MyGuichetAccountConfig) -> str:
         if account.cookie_file.exists():
             restrict_file(account.cookie_file)
             cookie = account.cookie_file.read_text(encoding="utf-8").strip()
@@ -110,8 +142,8 @@ class MyGuichetDocumentSource:
             )
         return self.client
 
-    def _refresh_cookie(self, account: AccountConfig) -> str:
-        from login_and_grab_cookie import LoginError, refresh_cookie
+    def _refresh_cookie(self, account: MyGuichetAccountConfig) -> str:
+        from sources.myguichet.login import LoginError, refresh_cookie
 
         try:
             return refresh_cookie(account)
@@ -128,7 +160,7 @@ class MyGuichetDocumentSource:
         except MyGuichetError as error:
             raise _source_error(error) from error
         return [
-            SourceMessage(id=communication_id, metadata=metadata)
+            SourceMessage(id=communication_id, metadata=_message_metadata(metadata))
             for communication_id, metadata in communications
         ]
 

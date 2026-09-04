@@ -14,12 +14,14 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, sync_playwright
 
 from config import (
-    AccountConfig,
     ConfigurationError,
-    get_myguichet_account,
     get_source_account,
     get_source_accounts,
     load_environment,
+)
+from sources.myguichet.config import (
+    MyGuichetAccountConfig,
+    myguichet_account_from_source,
 )
 from storage import (
     AlreadyRunning,
@@ -42,7 +44,7 @@ def portal_url(language: str) -> str:
     return f"https://www.services-publics.lu/fpgun-iep-front/?lang={language}"
 
 
-def load_luxtrust_credentials(account: AccountConfig) -> tuple[str, str]:
+def load_luxtrust_credentials(account: MyGuichetAccountConfig) -> tuple[str, str]:
     """Load credentials from .env or securely prompt in an interactive shell."""
     username = account.luxtrust_username
     password = account.luxtrust_password
@@ -99,8 +101,6 @@ def start_luxtrust_login(page: Page, username: str, password: str) -> None:
     """Fill the first-factor form; LuxTrust device approval remains external."""
     try:
         page.get_by_role("link", name=re.compile(r"LuxTrust")).click()
-        # The session identifier in this title changes each time, so match only
-        # its stable prefix.
         luxtrust = page.frame_locator('iframe[title^="Connection to LuxTrust"]')
         luxtrust.get_by_text("LuxTrust Mobile", exact=True).click()
         luxtrust.get_by_role("textbox", name="User ID").fill(username)
@@ -113,19 +113,14 @@ def start_luxtrust_login(page: Page, username: str, password: str) -> None:
         ) from error
 
 
-def refresh_cookie(account: AccountConfig | None = None) -> str:
-    """Log in if needed, write cookie.txt atomically, and return its value.
-
-    This function deliberately does not take a process lock. The regular
-    watcher owns that lock before calling it; direct execution is for manual
-    troubleshooting and should not overlap a scheduled watcher run.
-    """
+def refresh_cookie(account: MyGuichetAccountConfig | None = None) -> str:
+    """Log in if needed, write cookie.txt atomically, and return its value."""
     load_environment()
     if account is None:
         accounts = get_source_accounts()
         if len(accounts) != 1:
             raise LoginError("Use --account when more than one account is configured.")
-        account = get_myguichet_account(accounts[0])
+        account = myguichet_account_from_source(accounts[0])
     url = portal_url(account.language)
     prepare_private_directory(account.runtime_dir)
     prepare_private_directory(account.profile_dir)
@@ -142,8 +137,6 @@ def refresh_cookie(account: AccountConfig | None = None) -> str:
             )
             page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
-            # A still-valid persistent browser profile can refresh cookie.txt
-            # without entering credentials or triggering another MFA request.
             cookie_header = ""
             if "fpgun-iep-front" in page.url and "TAMLoginServlet" not in page.url:
                 cookie_header = session_cookie_header(context, account.language)
@@ -188,18 +181,16 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point for manually refreshing cookie.txt."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        # The watcher calls refresh_cookie() while it already owns this lock.
-        # Direct use of this script also needs the same protection.
         load_environment()
         if args.account:
-            account = get_myguichet_account(get_source_account(args.account))
+            account = myguichet_account_from_source(get_source_account(args.account))
         else:
             accounts = get_source_accounts()
             if len(accounts) != 1:
                 raise LoginError(
                     "Use --account when more than one account is configured."
                 )
-            account = get_myguichet_account(accounts[0])
+            account = myguichet_account_from_source(accounts[0])
         with exclusive_lock(account.lock_file):
             refresh_cookie(account)
     except AlreadyRunning as error:

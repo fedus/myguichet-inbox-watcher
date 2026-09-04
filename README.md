@@ -18,16 +18,14 @@ The project is designed for a private macOS or Linux machine with Python 3.10+.
 
 | File | Responsibility |
 | --- | --- |
-| `myguichet_get_new_messages.py` | Main command: resolves configured document accounts and runs the watcher. |
+| `document_watcher.py` | Main command: resolves configured document accounts and runs the watcher. |
 | `watcher_core.py` | Source/output-agnostic polling, state, locking, staging, size-limit, and checkpoint handling. |
 | `sources/base.py` | Small protocol a document source implements. |
-| `sources/myguichet.py` | Adapter that plugs the MyGuichet client and LuxTrust login flow into the watcher. |
+| `sources/myguichet/` | MyGuichet source plugin: config, API client, LuxTrust login, source adapter, and probe command. |
 | `outputs/base.py` | Small protocol a document output implements. |
-| `outputs/folder.py` | Output adapter that atomically saves documents into a local folder. |
-| `login_and_grab_cookie.py` | Opens MyGuichet in Chromium, performs first-factor LuxTrust login, waits for device approval, and writes `cookie.txt`. |
+| `outputs/folder/` | Folder output plugin: path/mode config and atomic local file delivery. |
 | `mqtt_trigger.py` | Long-running MQTT subscriber that triggers one-account or all-account polling. |
-| `client.py` | Read-only HTTP client for the MyGuichet endpoints. |
-| `config.py` | `.env` settings and validation. |
+| `config.py` | Generic `.env` account/source/output wiring. |
 | `storage.py` | Private atomic file writes and a lock that prevents overlapping runs. |
 
 Runtime data is deliberately kept out of Git:
@@ -86,7 +84,8 @@ DOCUMENT_<USER>_<SOURCE_PLUGIN>_MAX_DOCUMENT_MB=100
 ```
 
 `RUNTIME_DIR` defaults to `accounts/<account>`. `MAX_DOCUMENT_MB` defaults to
-`100` and applies before a document is handed to outputs.
+`100` and applies before a document is handed to outputs. Source and output
+plugins validate their own settings after generic wiring has selected them.
 
 ## Full Example
 
@@ -187,13 +186,13 @@ unattended setup must put both values in `.env`.
 Poll every configured account:
 
 ```sh
-.venv/bin/python myguichet_get_new_messages.py
+.venv/bin/python document_watcher.py
 ```
 
 Poll one account:
 
 ```sh
-.venv/bin/python myguichet_get_new_messages.py --account alice_myguichet
+.venv/bin/python document_watcher.py --account alice_myguichet
 ```
 
 The watcher:
@@ -213,7 +212,7 @@ message can be delivered again on the next run.
 For MyGuichet login troubleshooting only:
 
 ```sh
-.venv/bin/python login_and_grab_cookie.py --account alice_myguichet
+.venv/bin/python -m sources.myguichet.login --account alice_myguichet
 ```
 
 Do not run that command while the regular watcher is running for the same
@@ -256,7 +255,7 @@ automatic authentication refresh/retry when a source reports an expired session.
 For a simple check every 15 minutes, edit your user crontab with `crontab -e`:
 
 ```cron
-*/15 * * * * umask 077; cd /path/to/document-inbox-watcher && /path/to/document-inbox-watcher/.venv/bin/python myguichet_get_new_messages.py >> /path/to/document-inbox-watcher/watcher.log 2>&1
+*/15 * * * * umask 077; cd /path/to/document-inbox-watcher && /path/to/document-inbox-watcher/.venv/bin/python document_watcher.py >> /path/to/document-inbox-watcher/watcher.log 2>&1
 ```
 
 ## Add Plugins
