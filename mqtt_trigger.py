@@ -15,6 +15,7 @@ from config import (
     get_source_accounts,
     load_environment,
 )
+from input_broker import InputError, PushInputBroker
 from outputs.base import OutputError
 from sources.base import SourceAccountConfig, SourceError
 from storage import AlreadyRunning
@@ -22,6 +23,7 @@ from watcher_core import StateError, poll_account
 
 
 DEFAULT_TOPIC = "documents/poll"
+DEFAULT_INPUT_TOPIC = "documents/input/provide"
 
 
 @dataclass(frozen=True)
@@ -32,17 +34,36 @@ class PollRequest:
     payload: str
 
 
-def mqtt_port() -> int:
-    raw_value = os.environ.get("DOCUMENT_MQTT_PORT", "1883").strip()
+@dataclass(frozen=True)
+class InputProvideRequest:
+    """One externally provided answer for an account challenge."""
+
+    account_name: str
+    fields: dict[str, str]
+    payload: str
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name, str(default)).strip()
     try:
-        port = int(raw_value)
+        value = int(raw_value)
     except ValueError as error:
-        raise ConfigurationError(
-            "DOCUMENT_MQTT_PORT must be a positive integer."
-        ) from error
-    if port <= 0:
-        raise ConfigurationError("DOCUMENT_MQTT_PORT must be a positive integer.")
-    return port
+        raise ConfigurationError(f"{name} must be a positive integer.") from error
+    if value <= 0:
+        raise ConfigurationError(f"{name} must be a positive integer.")
+    return value
+
+
+def mqtt_port() -> int:
+    return _positive_int_env("DOCUMENT_MQTT_PORT", 1883)
+
+
+def mqtt_input_ttl_seconds() -> int:
+    return _positive_int_env("DOCUMENT_MQTT_INPUT_TTL_SECONDS", 300)
+
+
+def mqtt_worker_count() -> int:
+    return _positive_int_env("DOCUMENT_MQTT_WORKERS", 1)
 
 
 def parse_trigger_payload(payload: str) -> PollRequest:
@@ -77,10 +98,52 @@ def parse_trigger_payload(payload: str) -> PollRequest:
     )
 
 
+def parse_input_payload(payload: str) -> InputProvideRequest:
+    """Parse a generic MQTT input payload keyed by account name."""
+    try:
+        decoded = json.loads(payload)
+    except json.JSONDecodeError as error:
+        raise ConfigurationError("MQTT input payload must be JSON.") from error
+    if not isinstance(decoded, dict):
+        raise ConfigurationError("MQTT input payload must be a JSON object.")
+
+    account = decoded.get("for", decoded.get("account"))
+    if not isinstance(account, str) or not account.strip():
+        raise ConfigurationError(
+            "MQTT input payload must include a non-empty 'for' or 'account' value."
+        )
+
+    raw_fields = decoded.get("fields")
+    fields: dict[str, str]
+    if isinstance(raw_fields, dict):
+        fields = {
+            str(field).strip(): "" if value is None else str(value).strip()
+            for field, value in raw_fields.items()
+            if str(field).strip()
+        }
+    elif "code" in decoded:
+        raw_code = decoded["code"]
+        fields = {"code": "" if raw_code is None else str(raw_code).strip()}
+    else:
+        raise ConfigurationError(
+            "MQTT input payload must include 'code' or a 'fields' object."
+        )
+    if not fields or any(not value for value in fields.values()):
+        raise ConfigurationError("MQTT input payload contains an empty input value.")
+
+    return InputProvideRequest(account.strip(), fields, payload)
+
+
 def resolve_accounts(request: PollRequest) -> list[SourceAccountConfig]:
     if request.account_names is None:
         return get_source_accounts()
     return [get_source_account(name) for name in request.account_names]
+
+
+def describe_poll_request(request: PollRequest) -> str:
+    if request.account_names is None:
+        return "all configured accounts"
+    return ", ".join(request.account_names)
 
 
 def publish_status(client: object, status: str) -> None:
@@ -89,37 +152,54 @@ def publish_status(client: object, status: str) -> None:
         client.publish(topic, status)  # type: ignore[attr-defined]
 
 
-def worker(client: object, jobs: "queue.Queue[PollRequest]") -> None:
-    while True:
-        request = jobs.get()
-        try:
-            try:
-                accounts = resolve_accounts(request)
-            except ConfigurationError as error:
-                message = f"ERROR {error}"
-                print(message, file=sys.stderr)
-                publish_status(client, message)
-                continue
+def enqueue_poll_request(
+    client: object,
+    jobs: "queue.Queue[SourceAccountConfig]",
+    request: PollRequest,
+) -> None:
+    try:
+        accounts = resolve_accounts(request)
+    except ConfigurationError as error:
+        message = f"ERROR {error}"
+        print(message, file=sys.stderr)
+        publish_status(client, message)
+        return
 
-            for account in accounts:
-                try:
-                    count = poll_account(account)
-                except AlreadyRunning as error:
-                    message = f"{account.name} SKIPPED {error}"
-                    print(f"[{account.name}] {error}")
-                except (
-                    ConfigurationError,
-                    OutputError,
-                    SourceError,
-                    OSError,
-                    RuntimeError,
-                    StateError,
-                ) as error:
-                    message = f"{account.name} ERROR {error}"
-                    print(f"[{account.name}] Watcher failed: {error}", file=sys.stderr)
-                else:
-                    message = f"{account.name} OK {count}"
-                publish_status(client, message)
+    account_names = ", ".join(account.name for account in accounts)
+    print(f"MQTT trigger resolved to account(s): {account_names}")
+    for account in accounts:
+        jobs.put(account)
+        print(f"[{account.name}] Poll queued.")
+
+
+def worker(
+    client: object,
+    jobs: "queue.Queue[SourceAccountConfig]",
+    input_broker: PushInputBroker,
+) -> None:
+    while True:
+        account = jobs.get()
+        try:
+            print(f"[{account.name}] Poll started.")
+            try:
+                count = poll_account(account, input_broker=input_broker)
+            except AlreadyRunning as error:
+                message = f"{account.name} SKIPPED {error}"
+                print(f"[{account.name}] {error}")
+            except (
+                ConfigurationError,
+                OutputError,
+                SourceError,
+                OSError,
+                RuntimeError,
+                StateError,
+            ) as error:
+                message = f"{account.name} ERROR {error}"
+                print(f"[{account.name}] Watcher failed: {error}", file=sys.stderr)
+            else:
+                message = f"{account.name} OK {count}"
+                print(f"[{account.name}] Poll finished: {count} new message(s).")
+            publish_status(client, message)
         finally:
             jobs.task_done()
 
@@ -149,6 +229,17 @@ def main() -> int:
         return 1
     topic = os.environ.get("DOCUMENT_MQTT_TOPIC", DEFAULT_TOPIC).strip()
     topic = topic or DEFAULT_TOPIC
+    input_topic = os.environ.get(
+        "DOCUMENT_MQTT_INPUT_TOPIC", DEFAULT_INPUT_TOPIC
+    ).strip()
+    input_topic = input_topic or DEFAULT_INPUT_TOPIC
+    if input_topic == topic:
+        print(
+            "MQTT trigger failed: DOCUMENT_MQTT_INPUT_TOPIC must differ from "
+            "DOCUMENT_MQTT_TOPIC.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         client = make_client()
@@ -159,8 +250,17 @@ def main() -> int:
                 username, password or None
             )
 
-        jobs: "queue.Queue[PollRequest]" = queue.Queue()
-        threading.Thread(target=worker, args=(client, jobs), daemon=True).start()
+        jobs: "queue.Queue[SourceAccountConfig]" = queue.Queue()
+        input_broker = PushInputBroker(mqtt_input_ttl_seconds())
+        worker_count = mqtt_worker_count()
+        print(
+            f"Starting MQTT runner with {worker_count} worker(s); pushed input "
+            f"TTL is {input_broker.early_answer_ttl_seconds}s."
+        )
+        for _ in range(worker_count):
+            threading.Thread(
+                target=worker, args=(client, jobs, input_broker), daemon=True
+            ).start()
 
         def on_connect(
             client: object,
@@ -172,8 +272,12 @@ def main() -> int:
             del userdata, flags, properties
             code = getattr(reason_code, "value", reason_code)
             if code == 0:
-                print(f"Connected to MQTT broker at {host}; subscribed to {topic}.")
+                print(
+                    f"Connected to MQTT broker at {host}; subscribed to "
+                    f"{topic} and {input_topic}."
+                )
                 client.subscribe(topic)  # type: ignore[attr-defined]
+                client.subscribe(input_topic)  # type: ignore[attr-defined]
             else:
                 print(
                     f"MQTT connection failed with code {reason_code}.",
@@ -181,12 +285,35 @@ def main() -> int:
                 )
 
         def on_message(client: object, userdata: object, message: object) -> None:
-            del client, userdata
+            del userdata
             payload = message.payload.decode(  # type: ignore[attr-defined]
                 "utf-8", errors="replace"
             )
+            message_topic = str(getattr(message, "topic", ""))
+            if message_topic == input_topic:
+                try:
+                    request = parse_input_payload(payload)
+                    input_broker.provide(request.account_name, request.fields)
+                except (ConfigurationError, InputError) as error:
+                    status = f"INPUT ERROR {error}"
+                    print(f"Rejected MQTT input: {error}", file=sys.stderr)
+                else:
+                    status = f"{request.account_name} INPUT ACCEPTED"
+                    field_names = ", ".join(request.fields)
+                    print(
+                        f"[{request.account_name}] MQTT input accepted for "
+                        f"field(s): {field_names}."
+                    )
+                publish_status(client, status)
+                return
+
             try:
-                jobs.put(parse_trigger_payload(payload))
+                request = parse_trigger_payload(payload)
+                print(
+                    f"MQTT trigger received on {message_topic}: "
+                    f"{describe_poll_request(request)}."
+                )
+                enqueue_poll_request(client, jobs, request)
             except ConfigurationError as error:
                 print(f"Rejected MQTT trigger: {error}", file=sys.stderr)
 

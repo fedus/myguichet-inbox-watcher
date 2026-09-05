@@ -84,7 +84,11 @@ The image contains the application code. Runtime files are mounted separately:
 - `./downloads:/app/downloads` for the default folder output.
 
 Set `DOCUMENT_RUN_MODE=mqtt` in `.env` to run the MQTT subscriber instead of a
-one-shot poll.
+one-shot poll. You can also set it for a single Compose invocation:
+
+```sh
+DOCUMENT_RUN_MODE=mqtt docker compose up document-watcher
+```
 
 ## Configuration Model
 
@@ -259,10 +263,10 @@ The timeout belongs in the challenge and should match the service token
 validity window. If the answer does not arrive in time, the current account
 fails with a clear source error instead of hanging the whole watcher.
 
-The current one-shot command uses a CLI input broker: it can prompt on an
-interactive terminal and times out otherwise. A future HTTP service can provide
-another broker backed by SQLite, where each pending OTP has its own challenge
-id, account, source, expiry, and submitted answer.
+The one-shot command uses a CLI input broker: it can prompt on an interactive
+terminal and times out otherwise. The MQTT runner uses a push input broker, so
+another device can publish the requested fields without first listing open
+sessions.
 
 ## Run Once
 
@@ -310,6 +314,9 @@ broker and triggers the same polling code used by the one-shot command.
 DOCUMENT_MQTT_HOST=localhost
 DOCUMENT_MQTT_PORT=1883
 DOCUMENT_MQTT_TOPIC=documents/poll
+DOCUMENT_MQTT_WORKERS=1
+DOCUMENT_MQTT_INPUT_TOPIC=documents/input/provide
+DOCUMENT_MQTT_INPUT_TTL_SECONDS=300
 DOCUMENT_MQTT_STATUS_TOPIC=documents/poll/status
 ```
 
@@ -326,8 +333,35 @@ Accepted trigger payloads:
 - `{"account":"alice_myguichet"}` - poll one account.
 - `{"accounts":["alice_myguichet","bob_other"]}` - poll selected accounts.
 
-In Docker, set `DOCUMENT_RUN_MODE=mqtt` to run the MQTT subscriber instead of a
-one-shot poll.
+Sources that need external input, such as an OTP, use the same generic input
+broker as the CLI. With MQTT, publish the answer directly to
+`DOCUMENT_MQTT_INPUT_TOPIC`; the payload is keyed by configured account name:
+
+```sh
+mosquitto_pub -h localhost -t documents/input/provide -m '{"for":"alice_dkv","code":"123456"}'
+```
+
+`code` is only shorthand for the common one-field OTP case. It is equivalent to
+`"fields":{"code":"123456"}` and works when the source asks for a field named
+`code`.
+
+For non-OTP prompts, or sources that request multiple values, use `fields`:
+
+```sh
+mosquitto_pub -h localhost -t documents/input/provide -m '{"for":"bob_otherservice","fields":{"answer":"blue","device":"phone"}}'
+```
+
+The MQTT broker accepts answers even before the source asks for them and keeps
+them for `DOCUMENT_MQTT_INPUT_TTL_SECONDS` seconds. Each source challenge also
+has its own timeout; if no valid answer arrives before then, that account fails
+cleanly and the MQTT process keeps running. Set `DOCUMENT_MQTT_WORKERS` above
+`1` if you want multiple account polls, and therefore multiple input prompts,
+to run at the same time. Different accounts can wait for input at the same
+time. A second simultaneous challenge for the same account is rejected because
+the blind-push key would otherwise be ambiguous.
+
+In Docker, set `DOCUMENT_RUN_MODE=mqtt` in `.env` or before `docker compose up`
+to run the MQTT subscriber instead of a one-shot poll.
 
 ## Run Regularly
 

@@ -10,6 +10,8 @@ services:
 
     env_file:
       - .env
+    environment:
+      DOCUMENT_RUN_MODE: ${DOCUMENT_RUN_MODE:-poll}
     # Set DOCUMENT_RUN_MODE=mqtt in .env to keep this container subscribed to
     # the configured broker instead of running one poll and exiting.
 

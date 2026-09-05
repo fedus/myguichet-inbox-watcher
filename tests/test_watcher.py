@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import queue
 import sys
 import tempfile
+import threading
 import unittest
 from contextlib import nullcontext
 from pathlib import Path
@@ -16,7 +18,12 @@ sys.path.insert(0, str(WATCHER_ROOT))
 import watcher_core  # noqa: E402
 import mqtt_trigger  # noqa: E402
 import config  # noqa: E402
-from input_broker import InputChallenge, InputTimeoutError  # noqa: E402
+from input_broker import (  # noqa: E402
+    InputChallenge,
+    InputTimeoutError,
+    InputUnavailableError,
+    PushInputBroker,
+)
 from outputs import register_output  # noqa: E402
 from outputs.base import LocalDocument, OutputConfig, OutputError  # noqa: E402
 from outputs.folder import FolderOutput  # noqa: E402
@@ -669,6 +676,76 @@ class WatcherHelpersTest(unittest.TestCase):
 
             self.assertFalse(account.state_file.exists())
 
+    def test_push_input_broker_accepts_early_generic_fields_by_account(self) -> None:
+        broker = PushInputBroker(early_answer_ttl_seconds=10)
+        with patch("builtins.print"):
+            broker.provide("ALICE_OTHER", {"answer": "blue", "device": "phone"})
+
+            answer = broker.request_input(
+                InputChallenge(
+                    account_name="alice_other",
+                    source="other",
+                    kind="security_question",
+                    prompt="Answer the security question",
+                    fields=("answer", "device"),
+                    timeout_seconds=1,
+                )
+            )
+
+        self.assertEqual(answer, {"answer": "blue", "device": "phone"})
+
+    def test_push_input_broker_rejects_answers_missing_requested_fields(self) -> None:
+        broker = PushInputBroker(early_answer_ttl_seconds=10)
+        with patch("builtins.print"):
+            broker.provide("alice_other", {"code": "123456"})
+
+            with self.assertRaises(InputUnavailableError):
+                broker.request_input(
+                    InputChallenge(
+                        account_name="alice_other",
+                        source="other",
+                        kind="approval",
+                        prompt="Enter all approval fields",
+                        fields=("code", "pin"),
+                        timeout_seconds=1,
+                    )
+                )
+
+    def test_push_input_broker_handles_multiple_pending_accounts(self) -> None:
+        broker = PushInputBroker(early_answer_ttl_seconds=10)
+        results: "queue.Queue[tuple[str, dict[str, str]]]" = queue.Queue()
+
+        def wait_for_code(account_name: str) -> None:
+            answer = broker.request_input(
+                InputChallenge(
+                    account_name=account_name,
+                    source=account_name.rsplit("_", 1)[-1],
+                    kind="otp",
+                    prompt="Enter the one-time code",
+                    timeout_seconds=2,
+                )
+            )
+            results.put((account_name, answer))
+
+        threads = [
+            threading.Thread(target=wait_for_code, args=("alice_myguichet",)),
+            threading.Thread(target=wait_for_code, args=("bob_dkv",)),
+        ]
+        with patch("builtins.print"):
+            for thread in threads:
+                thread.start()
+
+            broker.provide("bob_dkv", {"code": "222222"})
+            broker.provide("alice_myguichet", {"code": "111111"})
+
+            for thread in threads:
+                thread.join(timeout=2)
+                self.assertFalse(thread.is_alive())
+
+        received = dict(results.get_nowait() for _ in threads)
+        self.assertEqual(received["alice_myguichet"], {"code": "111111"})
+        self.assertEqual(received["bob_dkv"], {"code": "222222"})
+
     def test_corrupt_state_is_not_silently_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_file = Path(temporary_directory) / "state.json"
@@ -901,6 +978,66 @@ class WatcherHelpersTest(unittest.TestCase):
             ).account_names,
             ["alice", "bob"],
         )
+
+    def test_mqtt_input_payload_accepts_code_shorthand(self) -> None:
+        request = mqtt_trigger.parse_input_payload(
+            '{"for":"fede_myguichet","code":"7ahdr"}'
+        )
+
+        self.assertEqual(request.account_name, "fede_myguichet")
+        self.assertEqual(request.fields, {"code": "7ahdr"})
+
+    def test_mqtt_input_payload_accepts_generic_fields(self) -> None:
+        request = mqtt_trigger.parse_input_payload(
+            '{"account":"fede_other","fields":{"answer":"blue","device":"phone"}}'
+        )
+
+        self.assertEqual(request.account_name, "fede_other")
+        self.assertEqual(request.fields, {"answer": "blue", "device": "phone"})
+
+    def test_mqtt_input_payload_requires_fields(self) -> None:
+        with self.assertRaises(config.ConfigurationError):
+            mqtt_trigger.parse_input_payload('{"for":"fede_other"}')
+
+    def test_mqtt_input_topic_must_differ_from_trigger_topic(self) -> None:
+        environment = {
+            "DOCUMENT_MQTT_HOST": "localhost",
+            "DOCUMENT_MQTT_TOPIC": "documents/input",
+            "DOCUMENT_MQTT_INPUT_TOPIC": "documents/input",
+        }
+        with (
+            patch.dict("os.environ", environment, clear=True),
+            patch.object(mqtt_trigger, "load_environment"),
+            patch("builtins.print"),
+        ):
+            self.assertEqual(mqtt_trigger.main(), 1)
+
+    def test_mqtt_worker_passes_push_input_broker_to_poll_account(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_myguichet",
+                source="myguichet",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+            )
+            jobs: "queue.Queue[SourceAccountConfig]" = queue.Queue()
+            broker = PushInputBroker()
+
+            worker_thread = threading.Thread(
+                target=mqtt_trigger.worker,
+                args=(object(), jobs, broker),
+                daemon=True,
+            )
+            with patch.object(mqtt_trigger, "poll_account", return_value=7) as mocked:
+                with patch("builtins.print"):
+                    worker_thread.start()
+                    jobs.put(account)
+                    jobs.join()
+
+            mocked.assert_called_once_with(account, input_broker=broker)
 
 
 if __name__ == "__main__":
