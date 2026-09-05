@@ -56,6 +56,36 @@ On a Linux server, Playwright may also need OS browser libraries:
 .venv/bin/python -m playwright install --with-deps chromium
 ```
 
+## Docker
+
+Build the image:
+
+```sh
+docker compose build
+```
+
+Run one poll with an interactive terminal, which is required when a source asks
+for an OTP:
+
+```sh
+docker compose run --rm document-watcher --account alice_dkv
+```
+
+Run the configured service once without overriding arguments:
+
+```sh
+docker compose up
+```
+
+The image contains the application code. Runtime files are mounted separately:
+
+- `document-watcher-accounts:/app/accounts` for cookies, OAuth tokens, browser
+  profiles, locks, and state.
+- `./downloads:/app/downloads` for the default folder output.
+
+Set `DOCUMENT_RUN_MODE=mqtt` in `.env` to run the MQTT subscriber instead of a
+one-shot poll.
+
 ## Configuration Model
 
 There is one user list:

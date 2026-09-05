@@ -1,3 +1,5 @@
+name: document-inbox-watcher
+
 services:
   document-watcher:
     build:
@@ -12,10 +14,8 @@ services:
     # the configured broker instead of running one poll and exiting.
 
     volumes:
-      - document-watcher-data:/app
+      - document-watcher-accounts:/app/accounts
       - ./downloads:/app/downloads
-
-    working_dir: /app
 
     restart: "no"
 
@@ -23,4 +23,4 @@ services:
       - no-new-privileges:true
 
 volumes:
-  document-watcher-data:
+  document-watcher-accounts:
