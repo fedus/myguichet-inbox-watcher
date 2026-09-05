@@ -7,6 +7,7 @@ from typing import Any
 from sources.base import (
     DownloadResponse,
     SourceAccountConfig,
+    SourceContext,
     SourceDocument,
     SourceError,
     SourceMessage,
@@ -153,8 +154,9 @@ class MyGuichetDocumentSource:
             ) from error
 
     def collect_unseen(
-        self, account: SourceAccountConfig, seen: set[str]
+        self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
     ) -> list[SourceMessage]:
+        del context
         try:
             communications = collect_unseen_communications(self._client(account), seen)
         except MyGuichetError as error:
@@ -165,8 +167,12 @@ class MyGuichetDocumentSource:
         ]
 
     def list_documents(
-        self, account: SourceAccountConfig, message: SourceMessage
+        self,
+        account: SourceAccountConfig,
+        context: SourceContext,
+        message: SourceMessage,
     ) -> list[SourceDocument]:
+        del context
         try:
             detail = self._client(account).get_edelivery(message.id)
         except MyGuichetError as error:
@@ -198,16 +204,20 @@ class MyGuichetDocumentSource:
     def open_document(
         self,
         account: SourceAccountConfig,
+        context: SourceContext,
         message: SourceMessage,
         document: SourceDocument,
     ) -> DownloadResponse:
-        del message
+        del context, message
         try:
             return self._client(account).download_document(document.id, document.name)
         except MyGuichetError as error:
             raise _source_error(error) from error
 
-    def refresh_authentication(self, account: SourceAccountConfig) -> None:
+    def refresh_authentication(
+        self, account: SourceAccountConfig, context: SourceContext
+    ) -> None:
+        del context
         self.close()
         self._refresh_cookie(self._account(account))
 

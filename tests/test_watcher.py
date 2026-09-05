@@ -16,6 +16,7 @@ sys.path.insert(0, str(WATCHER_ROOT))
 import watcher_core  # noqa: E402
 import mqtt_trigger  # noqa: E402
 import config  # noqa: E402
+from input_broker import InputChallenge, InputTimeoutError  # noqa: E402
 from outputs import register_output  # noqa: E402
 from outputs.base import LocalDocument, OutputConfig, OutputError  # noqa: E402
 from outputs.folder import FolderOutput  # noqa: E402
@@ -24,6 +25,7 @@ from sources.myguichet import REQUESTS_PER_PAGE, collect_unseen_communications  
 from sources.myguichet.config import myguichet_account_from_source  # noqa: E402
 from sources.base import (  # noqa: E402
     SourceAccountConfig,
+    SourceContext,
     SourceDocument,
     SourceError,
     SourceMessage,
@@ -69,15 +71,15 @@ class PartlyFailingSource:
     name = "partly_failing"
 
     def collect_unseen(
-        self, account: SourceAccountConfig, seen: set[str]
+        self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
     ) -> list[SourceMessage]:
-        del account, seen
+        del account, context, seen
         return [SourceMessage("1"), SourceMessage("2")]
 
     def list_documents(
-        self, account: SourceAccountConfig, message: SourceMessage
+        self, account: SourceAccountConfig, context: SourceContext, message: SourceMessage
     ) -> list[SourceDocument]:
-        del account
+        del account, context
         if message.id == "1":
             raise SourceResponseError("temporary source failure")
         return [SourceDocument("doc-2", "document.txt", "text/plain")]
@@ -85,14 +87,17 @@ class PartlyFailingSource:
     def open_document(
         self,
         account: SourceAccountConfig,
+        context: SourceContext,
         message: SourceMessage,
         document: SourceDocument,
     ) -> FakeResponse:
-        del account, message, document
+        del account, context, message, document
         return FakeResponse([b"downloaded"], "text/plain")
 
-    def refresh_authentication(self, account: SourceAccountConfig) -> None:
-        del account
+    def refresh_authentication(
+        self, account: SourceAccountConfig, context: SourceContext
+    ) -> None:
+        del account, context
 
     def close(self) -> None:
         pass
@@ -121,31 +126,96 @@ class ExpiringSource:
     refreshed = False
 
     def collect_unseen(
-        self, account: SourceAccountConfig, seen: set[str]
+        self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
     ) -> list[SourceMessage]:
-        del account, seen
+        del account, context, seen
         if not ExpiringSource.refreshed:
             raise SourceSessionExpired("expired")
         return []
 
     def list_documents(
-        self, account: SourceAccountConfig, message: SourceMessage
+        self, account: SourceAccountConfig, context: SourceContext, message: SourceMessage
     ) -> list[SourceDocument]:
-        del account, message
+        del account, context, message
         return []
 
     def open_document(
         self,
         account: SourceAccountConfig,
+        context: SourceContext,
         message: SourceMessage,
         document: SourceDocument,
     ) -> FakeResponse:
-        del account, message, document
+        del account, context, message, document
         return FakeResponse([b"content"])
 
-    def refresh_authentication(self, account: SourceAccountConfig) -> None:
-        del account
+    def refresh_authentication(
+        self, account: SourceAccountConfig, context: SourceContext
+    ) -> None:
+        del account, context
         ExpiringSource.refreshed = True
+
+    def close(self) -> None:
+        pass
+
+
+class StaticInputBroker:
+    def __init__(self, answers: dict[str, str]) -> None:
+        self.answers = answers
+        self.challenges: list[InputChallenge] = []
+
+    def request_input(self, challenge: InputChallenge) -> dict[str, str]:
+        self.challenges.append(challenge)
+        return self.answers
+
+
+class TimeoutInputBroker:
+    def request_input(self, challenge: InputChallenge) -> dict[str, str]:
+        raise InputTimeoutError(
+            f"Input challenge {challenge.id} for {challenge.account_name} timed out."
+        )
+
+
+class OtpSource:
+    name = "otp_source"
+    received_code = ""
+
+    def collect_unseen(
+        self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
+    ) -> list[SourceMessage]:
+        del seen
+        answer = context.request_input(
+            InputChallenge(
+                account_name=account.name,
+                source=account.source,
+                kind="otp",
+                prompt="Enter the one-time code",
+                timeout_seconds=300,
+            )
+        )
+        OtpSource.received_code = answer["code"]
+        return []
+
+    def list_documents(
+        self, account: SourceAccountConfig, context: SourceContext, message: SourceMessage
+    ) -> list[SourceDocument]:
+        del account, context, message
+        return []
+
+    def open_document(
+        self,
+        account: SourceAccountConfig,
+        context: SourceContext,
+        message: SourceMessage,
+        document: SourceDocument,
+    ) -> FakeResponse:
+        del account, context, message, document
+        return FakeResponse([b"content"])
+
+    def refresh_authentication(
+        self, account: SourceAccountConfig, context: SourceContext
+    ) -> None:
+        del account, context
 
     def close(self) -> None:
         pass
@@ -297,6 +367,53 @@ class WatcherHelpersTest(unittest.TestCase):
             self.assertEqual(watcher_core.poll_account(account), 0)
 
         self.assertTrue(ExpiringSource.refreshed)
+
+    def test_source_can_request_external_input_through_context(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch("builtins.print"),
+        ):
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_otp_source",
+                source="otp_source",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+            )
+            broker = StaticInputBroker({"code": "123456"})
+
+            count = watcher_core.run_poll(
+                account, OtpSource(), SourceContext(input_broker=broker)
+            )
+
+        self.assertEqual(count, 0)
+        self.assertEqual(OtpSource.received_code, "123456")
+        self.assertEqual(broker.challenges[0].account_name, "alice_otp_source")
+        self.assertEqual(broker.challenges[0].source, "otp_source")
+        self.assertEqual(broker.challenges[0].timeout_seconds, 300)
+
+    def test_input_timeout_aborts_account_without_hanging(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_otp_source",
+                source="otp_source",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+            )
+
+            with self.assertRaises(SourceError):
+                watcher_core.run_poll(
+                    account,
+                    OtpSource(),
+                    SourceContext(input_broker=TimeoutInputBroker()),
+                )
+
+            self.assertFalse(account.state_file.exists())
 
     def test_corrupt_state_is_not_silently_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

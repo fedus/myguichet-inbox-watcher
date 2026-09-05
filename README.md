@@ -181,6 +181,32 @@ If the username or password is omitted, an interactive run prompts for the
 missing value without saving it. A scheduler has no interactive terminal, so an
 unattended setup must put both values in `.env`.
 
+## External Input and OTP
+
+Source plugins can request human-provided data through the source context:
+
+```python
+answer = context.request_input(
+    InputChallenge(
+        account_name=account.name,
+        source=account.source,
+        kind="otp",
+        prompt="Enter the 6-digit one-time code",
+        timeout_seconds=300,
+    )
+)
+code = answer["code"]
+```
+
+The timeout belongs in the challenge and should match the service token
+validity window. If the answer does not arrive in time, the current account
+fails with a clear source error instead of hanging the whole watcher.
+
+The current one-shot command uses a CLI input broker: it can prompt on an
+interactive terminal and times out otherwise. A future HTTP service can provide
+another broker backed by SQLite, where each pending OTP has its own challenge
+id, account, source, expiry, and submitted answer.
+
 ## Run Once
 
 Poll every configured account:

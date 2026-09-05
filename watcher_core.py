@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, BinaryIO
 
+from input_broker import CliInputBroker, InputBroker
 from requests import RequestException
 
 from outputs import create_output
@@ -21,6 +22,7 @@ from sources.base import (
     DocumentSource,
     DownloadResponse,
     SourceAccountConfig,
+    SourceContext,
     SourceDocument,
     SourceError,
     SourceMessage,
@@ -368,16 +370,17 @@ def deliver_document(
 def download_documents(
     account: SourceAccountConfig,
     source: DocumentSource,
+    context: SourceContext,
     message: SourceMessage,
     outputs: list[tuple[OutputConfig, DocumentOutput]],
 ) -> int:
     """Fetch all documents for one message and deliver them to every output."""
-    documents = source.list_documents(account, message)
+    documents = source.list_documents(account, context, message)
     maximum_bytes = account.maximum_document_mb * 1024 * 1024
     downloaded = 0
     for document in documents:
         temporary_path: Path | None = None
-        response = source.open_document(account, message, document)
+        response = source.open_document(account, context, message, document)
         content_type = response.headers.get("Content-Type", document.content_type)
         if content_type and content_type != document.content_type:
             document = SourceDocument(
@@ -408,12 +411,17 @@ def download_documents(
     return downloaded
 
 
-def run_poll(account: SourceAccountConfig, source: DocumentSource) -> int:
+def run_poll(
+    account: SourceAccountConfig,
+    source: DocumentSource,
+    context: SourceContext | None = None,
+) -> int:
     """Run one polling pass against a source account."""
+    context = context or SourceContext(CliInputBroker())
     prepare_private_directory(account.runtime_dir)
     state = load_state(account)
     seen = set(state["seen_ids"])
-    messages = source.collect_unseen(account, seen)
+    messages = source.collect_unseen(account, context, seen)
     if not messages:
         state["last_run"] = utc_now()
         save_state(account, state)
@@ -426,7 +434,9 @@ def run_poll(account: SourceAccountConfig, source: DocumentSource) -> int:
     try:
         for message in messages:
             try:
-                document_count = download_documents(account, source, message, outputs)
+                document_count = download_documents(
+                    account, source, context, message, outputs
+                )
             except SourceSessionExpired:
                 raise
             except (SourceError, OutputError, OSError) as error:
@@ -454,21 +464,24 @@ def run_poll(account: SourceAccountConfig, source: DocumentSource) -> int:
     return processed
 
 
-def poll_account(account: SourceAccountConfig) -> int:
+def poll_account(
+    account: SourceAccountConfig, input_broker: InputBroker | None = None
+) -> int:
     """Poll one account with locking and one expired-session refresh."""
+    context = SourceContext(input_broker or CliInputBroker())
     with exclusive_lock(account.lock_file):
         source = create_source(account.source)
         try:
             try:
-                return run_poll(account, source)
+                return run_poll(account, source, context)
             except SourceSessionExpired:
                 print(
                     f"[{account.name}] Saved session expired; refreshing "
                     f"{account.source} authentication and retrying once."
                 )
-                source.refresh_authentication(account)
+                source.refresh_authentication(account, context)
                 source.close()
                 source = create_source(account.source)
-                return run_poll(account, source)
+                return run_poll(account, source, context)
         finally:
             source.close()

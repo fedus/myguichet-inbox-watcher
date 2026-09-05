@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Protocol
 
+from input_broker import InputBroker, InputChallenge, InputError
+
 if TYPE_CHECKING:
     from outputs.base import OutputConfig
 
@@ -20,6 +22,20 @@ class SourceSessionExpired(SourceError):
 
 class SourceResponseError(SourceError):
     """A source returned data that cannot be safely processed."""
+
+
+@dataclass(frozen=True)
+class SourceContext:
+    """Runtime services available to source plugins during one poll."""
+
+    input_broker: InputBroker
+
+    def request_input(self, challenge: InputChallenge) -> dict[str, str]:
+        """Request external input and expose failures as source errors."""
+        try:
+            return self.input_broker.request_input(challenge)
+        except InputError as error:
+            raise SourceError(str(error)) from error
 
 
 @dataclass(frozen=True)
@@ -72,24 +88,27 @@ class DocumentSource(Protocol):
     name: str
 
     def collect_unseen(
-        self, account: SourceAccountConfig, seen: set[str]
+        self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
     ) -> list[SourceMessage]:
         """Return unseen messages in oldest-first processing order."""
 
     def list_documents(
-        self, account: SourceAccountConfig, message: SourceMessage
+        self, account: SourceAccountConfig, context: SourceContext, message: SourceMessage
     ) -> list[SourceDocument]:
         """Return documents belonging to one message."""
 
     def open_document(
         self,
         account: SourceAccountConfig,
+        context: SourceContext,
         message: SourceMessage,
         document: SourceDocument,
     ) -> DownloadResponse:
         """Return a streaming document response; the caller closes it."""
 
-    def refresh_authentication(self, account: SourceAccountConfig) -> None:
+    def refresh_authentication(
+        self, account: SourceAccountConfig, context: SourceContext
+    ) -> None:
         """Refresh the account's external authentication/session."""
 
     def close(self) -> None:
