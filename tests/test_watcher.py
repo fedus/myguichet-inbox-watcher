@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import queue
 import sys
 import tempfile
@@ -149,6 +150,14 @@ class FakeHttpSession:
     def get(self, url: str, **kwargs: object) -> FakeHttpResponse:
         self.calls.append((url, kwargs))
         return FakeHttpResponse()
+
+
+class FakeMqttStatusClient:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, str]] = []
+
+    def publish(self, topic: str, payload: str) -> None:
+        self.published.append((topic, payload))
 
 
 class PartlyFailingSource:
@@ -1011,6 +1020,119 @@ class WatcherHelpersTest(unittest.TestCase):
             patch("builtins.print"),
         ):
             self.assertEqual(mqtt_trigger.main(), 1)
+
+    def test_mqtt_publish_status_sends_json_to_status_topic(self) -> None:
+        client = FakeMqttStatusClient()
+        event = {
+            "schema": mqtt_trigger.STATUS_SCHEMA,
+            "event": "poll.finished",
+            "status": "ok",
+            "timestamp": "2026-09-05T12:00:00Z",
+            "account": "fede_dkv",
+            "source": "dkv",
+            "new_messages": 3,
+        }
+
+        with patch.dict(
+            "os.environ", {"DOCUMENT_MQTT_STATUS_TOPIC": "documents/poll/status"}
+        ):
+            mqtt_trigger.publish_status(client, event)
+
+        self.assertEqual(len(client.published), 1)
+        topic, payload = client.published[0]
+        self.assertEqual(topic, "documents/poll/status")
+        decoded = json.loads(payload)
+        self.assertEqual(decoded["schema"], mqtt_trigger.STATUS_SCHEMA)
+        self.assertEqual(decoded["event"], "poll.finished")
+        self.assertEqual(decoded["status"], "ok")
+        self.assertEqual(decoded["account"], "fede_dkv")
+        self.assertEqual(decoded["source"], "dkv")
+        self.assertEqual(decoded["new_messages"], 3)
+
+    def test_mqtt_worker_publishes_json_poll_success_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_myguichet",
+                source="myguichet",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+            )
+            jobs: "queue.Queue[SourceAccountConfig]" = queue.Queue()
+            broker = PushInputBroker()
+            client = FakeMqttStatusClient()
+
+            worker_thread = threading.Thread(
+                target=mqtt_trigger.worker,
+                args=(client, jobs, broker),
+                daemon=True,
+            )
+            with (
+                patch.object(mqtt_trigger, "poll_account", return_value=7),
+                patch.dict(
+                    "os.environ",
+                    {"DOCUMENT_MQTT_STATUS_TOPIC": "documents/poll/status"},
+                ),
+                patch("builtins.print"),
+            ):
+                worker_thread.start()
+                jobs.put(account)
+                jobs.join()
+
+        payloads = [json.loads(payload) for _, payload in client.published]
+        self.assertEqual(
+            [(payload["event"], payload["status"]) for payload in payloads],
+            [("poll.started", "running"), ("poll.finished", "ok")],
+        )
+        self.assertEqual(payloads[-1]["account"], "alice_myguichet")
+        self.assertEqual(payloads[-1]["source"], "myguichet")
+        self.assertEqual(payloads[-1]["new_messages"], 7)
+
+    def test_mqtt_worker_publishes_json_poll_error_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_dkv",
+                source="dkv",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+            )
+            jobs: "queue.Queue[SourceAccountConfig]" = queue.Queue()
+            broker = PushInputBroker()
+            client = FakeMqttStatusClient()
+
+            worker_thread = threading.Thread(
+                target=mqtt_trigger.worker,
+                args=(client, jobs, broker),
+                daemon=True,
+            )
+            with (
+                patch.object(
+                    mqtt_trigger,
+                    "poll_account",
+                    side_effect=SourceError("source unavailable"),
+                ),
+                patch.dict(
+                    "os.environ",
+                    {"DOCUMENT_MQTT_STATUS_TOPIC": "documents/poll/status"},
+                ),
+                patch("builtins.print"),
+            ):
+                worker_thread.start()
+                jobs.put(account)
+                jobs.join()
+
+        payload = json.loads(client.published[-1][1])
+        self.assertEqual(payload["event"], "poll.finished")
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["account"], "alice_dkv")
+        self.assertEqual(payload["source"], "dkv")
+        self.assertEqual(payload["error_type"], "SourceError")
+        self.assertEqual(payload["error_message"], "source unavailable")
 
     def test_mqtt_worker_passes_push_input_broker_to_poll_account(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

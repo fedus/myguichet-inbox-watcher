@@ -360,6 +360,26 @@ to run at the same time. Different accounts can wait for input at the same
 time. A second simultaneous challenge for the same account is rejected because
 the blind-push key would otherwise be ambiguous.
 
+If `DOCUMENT_MQTT_STATUS_TOPIC` is set, the orchestration layer publishes JSON
+events there. Source and output plugins do not need to implement status
+publishing themselves. A successful account poll ends with:
+
+```json
+{
+  "schema": "document_watcher.status.v1",
+  "event": "poll.finished",
+  "status": "ok",
+  "timestamp": "2026-09-05T12:00:00Z",
+  "account": "alice_dkv",
+  "source": "dkv",
+  "new_messages": 3
+}
+```
+
+Errors use the same shape with `"status":"error"` plus `error_type` and
+`error_message`. The runner also emits `poll.queued`, `poll.started`,
+`input.accepted`, and rejected-trigger/input events.
+
 In Docker, set `DOCUMENT_RUN_MODE=mqtt` in `.env` or before `docker compose up`
 to run the MQTT subscriber instead of a one-shot poll.
 

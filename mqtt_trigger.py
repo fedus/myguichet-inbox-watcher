@@ -8,6 +8,8 @@ import queue
 import sys
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Mapping
 
 from config import (
     ConfigurationError,
@@ -24,6 +26,7 @@ from watcher_core import StateError, poll_account
 
 DEFAULT_TOPIC = "documents/poll"
 DEFAULT_INPUT_TOPIC = "documents/input/provide"
+STATUS_SCHEMA = "document_watcher.status.v1"
 
 
 @dataclass(frozen=True)
@@ -146,10 +149,37 @@ def describe_poll_request(request: PollRequest) -> str:
     return ", ".join(request.account_names)
 
 
-def publish_status(client: object, status: str) -> None:
+def utc_timestamp() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def status_event(event: str, status: str, **fields: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema": STATUS_SCHEMA,
+        "event": event,
+        "status": status,
+        "timestamp": utc_timestamp(),
+    }
+    payload.update({key: value for key, value in fields.items() if value is not None})
+    return payload
+
+
+def error_fields(error: BaseException) -> dict[str, str]:
+    return {
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+    }
+
+
+def publish_status(client: object, event: Mapping[str, object]) -> None:
     topic = os.environ.get("DOCUMENT_MQTT_STATUS_TOPIC", "").strip()
     if topic:
-        client.publish(topic, status)  # type: ignore[attr-defined]
+        payload = json.dumps(dict(event), sort_keys=True, separators=(",", ":"))
+        client.publish(topic, payload)  # type: ignore[attr-defined]
 
 
 def enqueue_poll_request(
@@ -160,9 +190,11 @@ def enqueue_poll_request(
     try:
         accounts = resolve_accounts(request)
     except ConfigurationError as error:
-        message = f"ERROR {error}"
-        print(message, file=sys.stderr)
-        publish_status(client, message)
+        print(f"ERROR {error}", file=sys.stderr)
+        publish_status(
+            client,
+            status_event("trigger.rejected", "error", **error_fields(error)),
+        )
         return
 
     account_names = ", ".join(account.name for account in accounts)
@@ -170,6 +202,15 @@ def enqueue_poll_request(
     for account in accounts:
         jobs.put(account)
         print(f"[{account.name}] Poll queued.")
+        publish_status(
+            client,
+            status_event(
+                "poll.queued",
+                "queued",
+                account=account.name,
+                source=account.source,
+            ),
+        )
 
 
 def worker(
@@ -181,11 +222,26 @@ def worker(
         account = jobs.get()
         try:
             print(f"[{account.name}] Poll started.")
+            publish_status(
+                client,
+                status_event(
+                    "poll.started",
+                    "running",
+                    account=account.name,
+                    source=account.source,
+                ),
+            )
             try:
                 count = poll_account(account, input_broker=input_broker)
             except AlreadyRunning as error:
-                message = f"{account.name} SKIPPED {error}"
                 print(f"[{account.name}] {error}")
+                event = status_event(
+                    "poll.finished",
+                    "skipped",
+                    account=account.name,
+                    source=account.source,
+                    **error_fields(error),
+                )
             except (
                 ConfigurationError,
                 OutputError,
@@ -194,12 +250,24 @@ def worker(
                 RuntimeError,
                 StateError,
             ) as error:
-                message = f"{account.name} ERROR {error}"
                 print(f"[{account.name}] Watcher failed: {error}", file=sys.stderr)
+                event = status_event(
+                    "poll.finished",
+                    "error",
+                    account=account.name,
+                    source=account.source,
+                    **error_fields(error),
+                )
             else:
-                message = f"{account.name} OK {count}"
                 print(f"[{account.name}] Poll finished: {count} new message(s).")
-            publish_status(client, message)
+                event = status_event(
+                    "poll.finished",
+                    "ok",
+                    account=account.name,
+                    source=account.source,
+                    new_messages=count,
+                )
+            publish_status(client, event)
         finally:
             jobs.task_done()
 
@@ -295,16 +363,23 @@ def main() -> int:
                     request = parse_input_payload(payload)
                     input_broker.provide(request.account_name, request.fields)
                 except (ConfigurationError, InputError) as error:
-                    status = f"INPUT ERROR {error}"
                     print(f"Rejected MQTT input: {error}", file=sys.stderr)
+                    event = status_event(
+                        "input.rejected", "error", **error_fields(error)
+                    )
                 else:
-                    status = f"{request.account_name} INPUT ACCEPTED"
                     field_names = ", ".join(request.fields)
                     print(
                         f"[{request.account_name}] MQTT input accepted for "
                         f"field(s): {field_names}."
                     )
-                publish_status(client, status)
+                    event = status_event(
+                        "input.accepted",
+                        "ok",
+                        account=request.account_name,
+                        fields=sorted(request.fields),
+                    )
+                publish_status(client, event)
                 return
 
             try:
