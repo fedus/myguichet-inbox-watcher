@@ -39,6 +39,11 @@ from storage import (
 
 
 DOWNLOAD_CHUNK_SIZE = 64 * 1024
+GENERIC_BINARY_CONTENT_TYPES = {
+    "application/download",
+    "application/octet-stream",
+    "binary/octet-stream",
+}
 TITLE_FIELD_NAMES = {
     "label",
     "object",
@@ -222,6 +227,17 @@ def document_filename(message: SourceMessage, document: SourceDocument) -> str:
     return f"{prefix}_{safe_filename(document.id, 32)}_{filename}"
 
 
+def response_content_type(response: DownloadResponse, fallback: str) -> str:
+    """Prefer a specific response type, but keep plugin hints over generic binary."""
+    raw_content_type = response.headers.get("Content-Type", "").strip()
+    if not raw_content_type:
+        return fallback
+    normalized = raw_content_type.split(";", 1)[0].strip().lower()
+    if fallback and normalized in GENERIC_BINARY_CONTENT_TYPES:
+        return fallback
+    return raw_content_type
+
+
 def write_document(
     response: DownloadResponse,
     destination: Path,
@@ -381,7 +397,7 @@ def download_documents(
     for document in documents:
         temporary_path: Path | None = None
         response = source.open_document(account, context, message, document)
-        content_type = response.headers.get("Content-Type", document.content_type)
+        content_type = response_content_type(response, document.content_type)
         if content_type and content_type != document.content_type:
             document = SourceDocument(
                 id=document.id,

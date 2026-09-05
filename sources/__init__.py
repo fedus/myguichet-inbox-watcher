@@ -52,7 +52,9 @@ def _register_built_ins() -> None:
     global _BUILT_INS_REGISTERED
     if _BUILT_INS_REGISTERED:
         return
+    from sources.dkv import DkvDocumentSource
     from sources.myguichet import MyGuichetDocumentSource
 
+    register_source("dkv", DkvDocumentSource)
     register_source("myguichet", MyGuichetDocumentSource)
     _BUILT_INS_REGISTERED = True

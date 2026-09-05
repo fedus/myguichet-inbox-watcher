@@ -21,6 +21,12 @@ from outputs import register_output  # noqa: E402
 from outputs.base import LocalDocument, OutputConfig, OutputError  # noqa: E402
 from outputs.folder import FolderOutput  # noqa: E402
 from sources import register_source  # noqa: E402
+from sources.dkv import (  # noqa: E402
+    DkvDocumentSource,
+    collect_treated_refunds,
+    documents_from_refund_detail,
+)
+from sources.dkv.client import DkvClient  # noqa: E402
 from sources.myguichet import REQUESTS_PER_PAGE, collect_unseen_communications  # noqa: E402
 from sources.myguichet.config import myguichet_account_from_source  # noqa: E402
 from sources.base import (  # noqa: E402
@@ -65,6 +71,77 @@ class FakeClient:
     def assert_requested_page_size(per_page: int) -> None:
         if per_page != REQUESTS_PER_PAGE:
             raise AssertionError("Unexpected page size")
+
+
+class FakeDkvListClient:
+    def __init__(self, pages: dict[int, dict[str, object]]) -> None:
+        self.pages = pages
+        self.requested_pages: list[tuple[int, int]] = []
+
+    def list_refunds(self, page_index: int, limit: int) -> dict[str, object]:
+        self.requested_pages.append((page_index, limit))
+        return self.pages[page_index]
+
+
+class FakeDkvAuthClient:
+    def __init__(self) -> None:
+        self.access_token = ""
+        self.closed = False
+        self.completed_otp = ""
+
+    def start_sms_login(
+        self, username: str, password: str, otp_type: str
+    ) -> str | dict[str, object]:
+        self.username = username
+        self.password = password
+        self.otp_type = otp_type
+        return "session-token"
+
+    def complete_sms_login(
+        self, session_token: str, otp: str, otp_type: str
+    ) -> dict[str, object]:
+        self.session_token = session_token
+        self.completed_otp = otp
+        self.completed_otp_type = otp_type
+        return {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "expires_in": 300,
+            "refresh_expires_in": 3600,
+        }
+
+    def refresh_access_token(self, refresh_token: str) -> dict[str, object]:
+        raise AssertionError(f"Unexpected refresh token use: {refresh_token}")
+
+    def set_access_token(self, access_token: str) -> None:
+        self.access_token = access_token
+
+    def list_refunds(self, page_index: int, limit: int) -> dict[str, object]:
+        del page_index, limit
+        return {"groups": [{"items": []}], "pagingInfo": {"limit": 20, "offset": 0, "total": 0}}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeHttpResponse:
+    def __init__(self, status_code: int = 200) -> None:
+        self.status_code = status_code
+        self.headers: dict[str, str] = {}
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeHttpSession:
+    def __init__(self) -> None:
+        self.headers: dict[str, str] = {}
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def get(self, url: str, **kwargs: object) -> FakeHttpResponse:
+        self.calls.append((url, kwargs))
+        return FakeHttpResponse()
 
 
 class PartlyFailingSource:
@@ -221,8 +298,52 @@ class OtpSource:
         pass
 
 
+class BinaryHeaderPdfSource:
+    name = "binary_header_pdf"
+
+    def collect_unseen(
+        self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
+    ) -> list[SourceMessage]:
+        del account, context, seen
+        return [SourceMessage("refund-1", {"subject": "Refund"})]
+
+    def list_documents(
+        self, account: SourceAccountConfig, context: SourceContext, message: SourceMessage
+    ) -> list[SourceDocument]:
+        del account, context, message
+        return [SourceDocument("IIS#18660489", "Statement", "application/pdf")]
+
+    def open_document(
+        self,
+        account: SourceAccountConfig,
+        context: SourceContext,
+        message: SourceMessage,
+        document: SourceDocument,
+    ) -> FakeResponse:
+        del account, context, message, document
+        return FakeResponse([b"%PDF-1.4\n"], "application/octet-stream")
+
+    def refresh_authentication(
+        self, account: SourceAccountConfig, context: SourceContext
+    ) -> None:
+        del account, context
+
+    def close(self) -> None:
+        pass
+
+
 def communication(communication_id: int) -> dict[str, object]:
     return {"eDeliveryCommunicationHitDto": {"id": communication_id}}
+
+
+def refund(refund_id: str, status_code: str) -> dict[str, object]:
+    return {
+        "id": refund_id,
+        "title": f"Refund {refund_id}",
+        "description": "Reimbursement",
+        "status": status_code.title(),
+        "statusCode": status_code,
+    }
 
 
 def fake_source_account(
@@ -279,6 +400,19 @@ class WatcherHelpersTest(unittest.TestCase):
         )
 
         self.assertEqual(filename, "987654_123456_document.pdf")
+
+    def test_generic_binary_response_keeps_plugin_pdf_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = fake_source_account(root)
+
+            with patch("builtins.print"):
+                watcher_core.run_poll(account, BinaryHeaderPdfSource())
+
+            downloaded = list((root / "downloads").iterdir())
+            self.assertEqual(len(downloaded), 1)
+            self.assertTrue(downloaded[0].name.endswith(".pdf"))
+            self.assertFalse(downloaded[0].name.endswith(".bin"))
 
     def test_write_document_is_private_and_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -346,6 +480,126 @@ class WatcherHelpersTest(unittest.TestCase):
             [communication_id for communication_id, _ in result], ["3", "4"]
         )
         self.assertEqual(client.requested_pages, [1, 2])
+
+    def test_dkv_pagination_collects_only_unseen_treated_refunds_to_the_end(self) -> None:
+        client = FakeDkvListClient(
+            {
+                0: {
+                    "groups": [
+                        {
+                            "items": [
+                                refund("REFUND#newest-treated", "TREATED"),
+                                refund("REFUND#sent", "SENT"),
+                            ]
+                        }
+                    ],
+                    "pagingInfo": {"limit": 2, "offset": 0, "total": 4},
+                },
+                1: {
+                    "groups": [
+                        {
+                            "items": [
+                                refund("REFUND#old-treated", "TREATED"),
+                                refund("REFUND#seen-treated", "TREATED"),
+                            ]
+                        }
+                    ],
+                    "pagingInfo": {"limit": 2, "offset": 2, "total": 4},
+                },
+            }
+        )
+
+        result = collect_treated_refunds(
+            client, seen={"REFUND#seen-treated"}, page_limit=2  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(
+            [refund_id for refund_id, _ in result],
+            ["REFUND#old-treated", "REFUND#newest-treated"],
+        )
+        self.assertEqual(client.requested_pages, [(0, 2), (1, 2)])
+
+    def test_dkv_refund_detail_maps_downloadable_documents(self) -> None:
+        documents = documents_from_refund_detail(
+            "REFUND#1",
+            {
+                "id": "REFUND#1",
+                "statusCode": "TREATED",
+                "listDocument": [
+                    {
+                        "idDocument": "IIS#18660489",
+                        "label": "Statement",
+                        "logo": "pdf",
+                        "order": 1,
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(len(documents), 1)
+        self.assertEqual(documents[0].id, "IIS#18660489")
+        self.assertEqual(documents[0].name, "Statement")
+        self.assertEqual(documents[0].content_type, "application/pdf")
+
+    def test_dkv_refund_detail_rejects_sent_reimbursements(self) -> None:
+        with self.assertRaises(SourceResponseError):
+            documents_from_refund_detail(
+                "REFUND_SUBMIT#1",
+                {"id": "REFUND_SUBMIT#1", "statusCode": "SENT", "listDocument": []},
+            )
+
+    def test_dkv_plugin_requests_sms_otp_and_persists_token(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary_directory,
+            patch("builtins.print"),
+        ):
+            root = Path(temporary_directory)
+            fake_client = FakeDkvAuthClient()
+            account = SourceAccountConfig(
+                name="alice_dkv",
+                source="dkv",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+                source_settings={
+                    "username": "alice-user",
+                    "password": "secret",
+                    "otp_timeout_seconds": "300",
+                },
+            )
+            broker = StaticInputBroker({"code": "654321"})
+
+            count = watcher_core.run_poll(
+                account,
+                DkvDocumentSource(lambda: fake_client),  # type: ignore[arg-type]
+                SourceContext(input_broker=broker),
+            )
+
+            token_file = root / "dkv_token.json"
+            self.assertEqual(count, 0)
+            self.assertEqual(fake_client.completed_otp, "654321")
+            self.assertEqual(fake_client.access_token, "access-token")
+            self.assertTrue(token_file.exists())
+            self.assertIn("access-token", token_file.read_text(encoding="utf-8"))
+            self.assertEqual(broker.challenges[0].account_name, "alice_dkv")
+            self.assertEqual(broker.challenges[0].source, "dkv")
+            self.assertEqual(broker.challenges[0].timeout_seconds, 300)
+
+    def test_dkv_client_downloads_document_by_encoded_document_id(self) -> None:
+        client = DkvClient()
+        fake_session = FakeHttpSession()
+        client.session = fake_session  # type: ignore[assignment]
+
+        response = client.download_document("IIS#18660489")
+
+        self.assertFalse(response.closed)
+        self.assertEqual(
+            fake_session.calls[0][0],
+            "https://api-client-external-secure.lalux-partners.lu/documents/IIS%2318660489",
+        )
+        self.assertEqual(fake_session.calls[0][1]["params"], {"idFile": "IIS#18660489"})
+        self.assertTrue(fake_session.calls[0][1]["stream"])
 
     def test_poll_account_refreshes_an_expired_session_once_then_retries(self) -> None:
         ExpiringSource.refreshed = False

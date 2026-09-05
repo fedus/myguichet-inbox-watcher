@@ -2,7 +2,8 @@
 
 This small, unofficial tool checks configured document inboxes, fetches
 documents it has not processed before, and sends those documents to configured
-outputs. It ships with a MyGuichet source plugin and a folder output plugin.
+outputs. It ships with MyGuichet and DKV/Lalux EasyApp source plugins, plus a
+folder output plugin.
 
 MyGuichet uses the normal MyGuichet/LuxTrust login flow: the username and
 password can be entered by Playwright, but the LuxTrust mobile/device approval
@@ -21,6 +22,7 @@ The project is designed for a private macOS or Linux machine with Python 3.10+.
 | `document_watcher.py` | Main command: resolves configured document accounts and runs the watcher. |
 | `watcher_core.py` | Source/output-agnostic polling, state, locking, staging, size-limit, and checkpoint handling. |
 | `sources/base.py` | Small protocol a document source implements. |
+| `sources/dkv/` | DKV/Lalux EasyApp source plugin: config, OAuth/SMS OTP client, reimbursement adapter. |
 | `sources/myguichet/` | MyGuichet source plugin: config, API client, LuxTrust login, source adapter, and probe command. |
 | `outputs/base.py` | Small protocol a document output implements. |
 | `outputs/folder/` | Folder output plugin: path/mode config and atomic local file delivery. |
@@ -92,7 +94,7 @@ plugins validate their own settings after generic wiring has selected them.
 This example has:
 
 - users: Alice and Bob
-- source plugins: `myguichet` and a made-up `otherservice`
+- source plugins: `myguichet`, `dkv`, and a made-up `otherservice`
 - output plugins: the built-in `folder` output and a made-up `example_api`
 - Alice uses only `myguichet`
 - Bob uses both `myguichet` and `otherservice`
@@ -100,7 +102,7 @@ This example has:
 ```dotenv
 DOCUMENT_USERS=alice,bob
 DOCUMENT_ALICE_SOURCES=myguichet
-DOCUMENT_BOB_SOURCES=myguichet,otherservice
+DOCUMENT_BOB_SOURCES=myguichet,dkv,otherservice
 
 # Alice: MyGuichet -> folder + API
 DOCUMENT_ALICE_MYGUICHET_LUXTRUST_USERNAME=alice-luxtrust-user
@@ -121,6 +123,13 @@ DOCUMENT_BOB_MYGUICHET_HEADLESS=true
 DOCUMENT_BOB_MYGUICHET_OUTPUTS=local:folder
 DOCUMENT_BOB_MYGUICHET_OUTPUT_LOCAL_DIRECTORY=/srv/documents/bob/myguichet
 
+# Bob: DKV/Lalux EasyApp treated reimbursements -> folder only
+DOCUMENT_BOB_DKV_USERNAME=bob-dkv-user
+DOCUMENT_BOB_DKV_PASSWORD=bob-dkv-password
+DOCUMENT_BOB_DKV_OTP_TIMEOUT_SECONDS=300
+DOCUMENT_BOB_DKV_OUTPUTS=local:folder
+DOCUMENT_BOB_DKV_OUTPUT_LOCAL_DIRECTORY=/srv/documents/bob/dkv
+
 # Bob: OtherService -> folder + API
 DOCUMENT_BOB_OTHERSERVICE_USERNAME=bob-other-user
 DOCUMENT_BOB_OTHERSERVICE_PASSWORD=bob-other-password
@@ -131,8 +140,7 @@ DOCUMENT_BOB_OTHERSERVICE_OUTPUT_ARCHIVE_TOKEN=bob-api-token
 ```
 
 The `example_api` and `otherservice` plugins above are illustrative names; this
-repo currently implements only `myguichet` as a source and `folder` as an
-output.
+repo currently implements `myguichet` and `dkv` sources and the `folder` output.
 
 ## Folder Output
 
@@ -180,6 +188,25 @@ path is your space ID.
 If the username or password is omitted, an interactive run prompts for the
 missing value without saving it. A scheduler has no interactive terminal, so an
 unattended setup must put both values in `.env`.
+
+## DKV/Lalux EasyApp Source
+
+The `dkv` source uses the Lalux EasyApp API seen by the web frontend. It
+retrieves only reimbursements whose status code is `TREATED`; submitted/sent
+reimbursements are intentionally skipped.
+
+```dotenv
+DOCUMENT_<USER>_DKV_USERNAME=your-login
+DOCUMENT_<USER>_DKV_PASSWORD=your-password
+DOCUMENT_<USER>_DKV_OTP_TYPE=SMS
+DOCUMENT_<USER>_DKV_OTP_TIMEOUT_SECONDS=300
+DOCUMENT_<USER>_DKV_PAGE_LIMIT=20
+```
+
+The first login submits username/password, requests an SMS OTP, and waits for
+that OTP through the generic external-input broker. Successful OAuth tokens are
+stored in the account runtime directory as `dkv_token.json`; later runs reuse
+the refresh token until the service rejects or expires it.
 
 ## External Input and OTP
 
@@ -325,7 +352,7 @@ shared consume folder. Runtime files remain private.
 
 ## Offline Checks
 
-The included tests do not contact MyGuichet or use credentials:
+The included tests do not contact external services or use credentials:
 
 ```sh
 .venv/bin/python -m unittest discover -s tests -v
