@@ -412,6 +412,21 @@ staged local document and close resources. Output-specific settings use:
 DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUT_<OUTPUT_NAME>_<SETTING>=...
 ```
 
+Outputs receive documents one at a time through `deliver(...)`. An output that
+needs a poll-level batch, such as "zip everything from this run", can also
+implement optional lifecycle hooks:
+
+```python
+def begin_poll(account, config) -> None: ...
+def end_poll(account, config, result) -> None: ...
+```
+
+`result` is an `OutputPollResult` with `processed_messages`,
+`delivered_documents`, and `failed_messages`. When any configured output has an
+`end_poll` hook, the watcher defers checkpointing successful messages until
+after all `end_poll` hooks succeed. This avoids marking documents as processed
+before a batch output has finalized its archive or upload.
+
 Every network or browser operation inside a plugin should have its own clear
 timeout. Plugin errors should raise `SourceError` or `OutputError` with a short,
 actionable message.

@@ -16,7 +16,13 @@ from input_broker import CliInputBroker, InputBroker
 from requests import RequestException
 
 from outputs import create_output
-from outputs.base import DocumentOutput, LocalDocument, OutputConfig, OutputError
+from outputs.base import (
+    DocumentOutput,
+    LocalDocument,
+    OutputConfig,
+    OutputError,
+    OutputPollResult,
+)
 from sources import create_source
 from sources.base import (
     DocumentSource,
@@ -369,6 +375,34 @@ def close_outputs(outputs: list[tuple[OutputConfig, DocumentOutput]]) -> None:
         raise first_error
 
 
+def has_batch_finalizers(outputs: list[tuple[OutputConfig, DocumentOutput]]) -> bool:
+    """Return true when at least one output wants a poll-level finalization hook."""
+    return any(callable(getattr(output, "end_poll", None)) for _, output in outputs)
+
+
+def begin_outputs(
+    account: SourceAccountConfig,
+    outputs: list[tuple[OutputConfig, DocumentOutput]],
+) -> None:
+    """Call optional output poll-start hooks."""
+    for config, output in outputs:
+        hook = getattr(output, "begin_poll", None)
+        if callable(hook):
+            hook(account, config)
+
+
+def end_outputs(
+    account: SourceAccountConfig,
+    outputs: list[tuple[OutputConfig, DocumentOutput]],
+    result: OutputPollResult,
+) -> None:
+    """Call optional output poll-end hooks."""
+    for config, output in outputs:
+        hook = getattr(output, "end_poll", None)
+        if callable(hook):
+            hook(account, config, result)
+
+
 def deliver_document(
     account: SourceAccountConfig,
     outputs: list[tuple[OutputConfig, DocumentOutput]],
@@ -445,9 +479,12 @@ def run_poll(
         return 0
 
     processed = 0
-    failed = False
+    delivered_documents = 0
+    failed_messages = 0
     outputs = configured_outputs(account)
+    defer_checkpoints = has_batch_finalizers(outputs)
     try:
+        begin_outputs(account, outputs)
         for message in messages:
             try:
                 document_count = download_documents(
@@ -460,22 +497,35 @@ def run_poll(
                     f"[{account.name}] Message {message.id} failed: {error}",
                     file=sys.stderr,
                 )
-                failed = True
+                failed_messages += 1
                 continue
 
             seen.add(message.id)
-            state["seen_ids"] = sorted(seen)
-            state["last_run"] = utc_now()
-            save_state(account, state)
             processed += 1
+            delivered_documents += document_count
+            if not defer_checkpoints:
+                state["seen_ids"] = sorted(seen)
+                state["last_run"] = utc_now()
+                save_state(account, state)
             print(
                 f"[{account.name}] Processed message {message.id} "
                 f"({document_count} document(s))."
             )
+
+        result = OutputPollResult(
+            processed_messages=processed,
+            delivered_documents=delivered_documents,
+            failed_messages=failed_messages,
+        )
+        end_outputs(account, outputs, result)
+        if defer_checkpoints:
+            state["seen_ids"] = sorted(seen)
+            state["last_run"] = utc_now()
+            save_state(account, state)
     finally:
         close_outputs(outputs)
 
-    if failed:
+    if failed_messages:
         raise SourceError("One or more messages failed; successful messages were checkpointed.")
     return processed
 

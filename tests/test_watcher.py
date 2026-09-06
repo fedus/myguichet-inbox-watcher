@@ -26,7 +26,12 @@ from input_broker import (  # noqa: E402
     PushInputBroker,
 )
 from outputs import register_output  # noqa: E402
-from outputs.base import LocalDocument, OutputConfig, OutputError  # noqa: E402
+from outputs.base import (  # noqa: E402
+    LocalDocument,
+    OutputConfig,
+    OutputError,
+    OutputPollResult,
+)
 from outputs.folder import FolderOutput  # noqa: E402
 from sources import register_source  # noqa: E402
 from sources.dkv import (  # noqa: E402
@@ -346,6 +351,93 @@ class BinaryHeaderPdfSource:
 
     def close(self) -> None:
         pass
+
+
+class TwoMessageSource:
+    name = "two_message"
+
+    def collect_unseen(
+        self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
+    ) -> list[SourceMessage]:
+        del account, context, seen
+        return [SourceMessage("1"), SourceMessage("2")]
+
+    def list_documents(
+        self, account: SourceAccountConfig, context: SourceContext, message: SourceMessage
+    ) -> list[SourceDocument]:
+        del account, context
+        return [SourceDocument(f"doc-{message.id}", f"document-{message.id}.txt", "text/plain")]
+
+    def open_document(
+        self,
+        account: SourceAccountConfig,
+        context: SourceContext,
+        message: SourceMessage,
+        document: SourceDocument,
+    ) -> FakeResponse:
+        del account, context, document
+        return FakeResponse([f"content-{message.id}".encode("utf-8")], "text/plain")
+
+    def refresh_authentication(
+        self, account: SourceAccountConfig, context: SourceContext
+    ) -> None:
+        del account, context
+
+    def close(self) -> None:
+        pass
+
+
+class BatchRecordingOutput:
+    name = "batch_recording"
+    events: list[str] = []
+    delivered: list[str] = []
+    result: OutputPollResult | None = None
+
+    def begin_poll(self, account: SourceAccountConfig, config: OutputConfig) -> None:
+        del account, config
+        type(self).events.append("begin")
+
+    def deliver(
+        self,
+        account: SourceAccountConfig,
+        config: OutputConfig,
+        message: SourceMessage,
+        document: SourceDocument,
+        local_document: LocalDocument,
+    ) -> None:
+        del account, config, document
+        type(self).events.append(f"deliver:{message.id}")
+        type(self).delivered.append(local_document.path.read_text(encoding="utf-8"))
+
+    def end_poll(
+        self,
+        account: SourceAccountConfig,
+        config: OutputConfig,
+        result: OutputPollResult,
+    ) -> None:
+        del account, config
+        type(self).events.append("end")
+        type(self).result = result
+
+    def close(self) -> None:
+        type(self).events.append("close")
+
+
+class BatchFailingOutput(BatchRecordingOutput):
+    name = "batch_failing"
+    events: list[str] = []
+    delivered: list[str] = []
+    result: OutputPollResult | None = None
+
+    def end_poll(
+        self,
+        account: SourceAccountConfig,
+        config: OutputConfig,
+        result: OutputPollResult,
+    ) -> None:
+        del account, config, result
+        type(self).events.append("end")
+        raise OutputError("could not finalize batch")
 
 
 def communication(communication_id: int) -> dict[str, object]:
@@ -934,6 +1026,58 @@ class WatcherHelpersTest(unittest.TestCase):
             self.assertEqual(destination.read_text(encoding="utf-8"), "content")
             self.assertEqual(destination.stat().st_mode & 0o777, 0o644)
             self.assertEqual(destination.parent.stat().st_mode & 0o777, 0o755)
+
+    def test_batch_output_hooks_wrap_poll_and_finalize_before_checkpoint(self) -> None:
+        register_output("batch_recording", BatchRecordingOutput)
+        BatchRecordingOutput.events = []
+        BatchRecordingOutput.delivered = []
+        BatchRecordingOutput.result = None
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = fake_source_account(
+                root,
+                (OutputConfig("zipper", "batch_recording"),),
+            )
+
+            with patch("builtins.print"):
+                count = watcher_core.run_poll(account, TwoMessageSource())
+
+            state = watcher_core.load_state(account)
+
+        self.assertEqual(count, 2)
+        self.assertEqual(
+            BatchRecordingOutput.events,
+            ["begin", "deliver:1", "deliver:2", "end", "close"],
+        )
+        self.assertEqual(BatchRecordingOutput.delivered, ["content-1", "content-2"])
+        self.assertEqual(state["seen_ids"], ["1", "2"])
+        self.assertIsNotNone(BatchRecordingOutput.result)
+        self.assertEqual(BatchRecordingOutput.result.processed_messages, 2)
+        self.assertEqual(BatchRecordingOutput.result.delivered_documents, 2)
+        self.assertEqual(BatchRecordingOutput.result.failed_messages, 0)
+
+    def test_batch_output_end_failure_prevents_checkpoint(self) -> None:
+        register_output("batch_failing", BatchFailingOutput)
+        BatchFailingOutput.events = []
+        BatchFailingOutput.delivered = []
+        BatchFailingOutput.result = None
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = fake_source_account(
+                root,
+                (OutputConfig("zipper", "batch_failing"),),
+            )
+
+            with patch("builtins.print"):
+                with self.assertRaises(OutputError):
+                    watcher_core.run_poll(account, TwoMessageSource())
+
+            self.assertFalse(account.state_file.exists())
+
+        self.assertEqual(
+            BatchFailingOutput.events,
+            ["begin", "deliver:1", "deliver:2", "end", "close"],
+        )
 
     def test_one_failed_message_does_not_block_later_messages(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

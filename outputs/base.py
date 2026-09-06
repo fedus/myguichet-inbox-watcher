@@ -32,8 +32,17 @@ class LocalDocument:
     size_bytes: int
 
 
+@dataclass(frozen=True)
+class OutputPollResult:
+    """Summary passed to output adapters that finalize a polling batch."""
+
+    processed_messages: int
+    delivered_documents: int
+    failed_messages: int
+
+
 class DocumentOutput(Protocol):
-    """Adapter that delivers one staged document somewhere."""
+    """Adapter that delivers staged documents somewhere."""
 
     name: str
 
