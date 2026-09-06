@@ -6,10 +6,9 @@ import argparse
 import sys
 
 from config import (
+    ConfigProvider,
     ConfigurationError,
-    get_source_account,
-    get_source_accounts,
-    load_environment,
+    EnvConfigProvider,
 )
 from outputs.base import OutputError
 from sources.base import SourceError
@@ -28,15 +27,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None, config_provider: ConfigProvider | None = None
+) -> int:
     """CLI entry point."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    provider = config_provider or EnvConfigProvider()
     total_messages = 0
     failed = False
     try:
-        load_environment()
+        provider.load()
         accounts = (
-            [get_source_account(args.account)] if args.account else get_source_accounts()
+            [provider.get_source_account(args.account)]
+            if args.account
+            else provider.get_source_accounts()
         )
         for account in accounts:
             try:

@@ -92,6 +92,12 @@ DOCUMENT_RUN_MODE=mqtt docker compose up document-watcher
 
 ## Configuration Model
 
+Configuration is read through a small provider contract. The default provider is
+`EnvConfigProvider`, which keeps the current `.env` syntax and environment
+variable behavior. Future JSON or SQLite/UI-backed providers should return the
+same `SourceAccountConfig` objects, while source and output plugins keep owning
+validation for their own settings.
+
 There is one user list:
 
 ```dotenv

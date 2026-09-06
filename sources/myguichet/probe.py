@@ -7,11 +7,10 @@ import sys
 from datetime import datetime, timezone
 
 from config import (
+    ConfigProvider,
     ConfigurationError,
+    EnvConfigProvider,
     ROOT,
-    get_source_account,
-    get_source_accounts,
-    load_environment,
 )
 from sources.myguichet.client import MyGuichetClient, MyGuichetError, SessionExpired
 from sources.myguichet.config import (
@@ -65,12 +64,17 @@ def probe_account(account: MyGuichetAccountConfig) -> int:
         client.close()
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None, config_provider: ConfigProvider | None = None
+) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    load_environment()
+    provider = config_provider or EnvConfigProvider()
+    provider.load()
     try:
         source_accounts = (
-            [get_source_account(args.account)] if args.account else get_source_accounts()
+            [provider.get_source_account(args.account)]
+            if args.account
+            else provider.get_source_accounts()
         )
         accounts = [
             myguichet_account_from_source(account) for account in source_accounts

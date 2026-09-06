@@ -165,6 +165,24 @@ class FakeMqttStatusClient:
         self.published.append((topic, payload))
 
 
+class FakeConfigProvider:
+    def __init__(self, accounts: list[SourceAccountConfig] | None = None) -> None:
+        self.accounts = accounts or []
+        self.loaded = False
+
+    def load(self) -> None:
+        self.loaded = True
+
+    def get_source_account(self, name: str) -> SourceAccountConfig:
+        for account in self.accounts:
+            if account.name == name:
+                return account
+        raise config.ConfigurationError(f"Unknown configured account {name!r}.")
+
+    def get_source_accounts(self) -> list[SourceAccountConfig]:
+        return list(self.accounts)
+
+
 class PartlyFailingSource:
     name = "partly_failing"
 
@@ -889,6 +907,48 @@ class WatcherHelpersTest(unittest.TestCase):
                 bob.output_configs[0].settings["directory"], str(root / "bob-docs")
             )
 
+    def test_env_config_provider_reads_accounts_from_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            provider = config.EnvConfigProvider(
+                environ={
+                    "DOCUMENT_USERS": "alice",
+                    "DOCUMENT_ALICE_SOURCES": "myguichet",
+                    "DOCUMENT_ALICE_MYGUICHET_SPACE_ID": "123",
+                    "DOCUMENT_ALICE_MYGUICHET_OUTPUTS": "local:folder",
+                    "DOCUMENT_ALICE_MYGUICHET_OUTPUT_LOCAL_DIRECTORY": "downloads/alice",
+                },
+                root=root,
+            )
+
+            account = provider.get_source_account("alice_myguichet")
+
+        self.assertEqual(account.name, "alice_myguichet")
+        self.assertEqual(account.source, "myguichet")
+        self.assertEqual(account.runtime_dir, root / "accounts" / "alice_myguichet")
+        self.assertEqual(account.source_settings["space_id"], "123")
+        self.assertEqual(account.output_configs[0].name, "local")
+        self.assertEqual(account.output_configs[0].type, "folder")
+        self.assertEqual(
+            account.output_configs[0].settings["directory"], "downloads/alice"
+        )
+
+    def test_env_config_provider_loads_dotenv_without_overriding_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            env_file = root / ".env"
+            env_file.write_text(
+                "DOCUMENT_USERS=from_file\nDOCUMENT_VALUE=from_file\n",
+                encoding="utf-8",
+            )
+            environ = {"DOCUMENT_VALUE": "from_env"}
+            provider = config.EnvConfigProvider(environ=environ, root=root)
+
+            provider.load()
+
+        self.assertEqual(environ["DOCUMENT_USERS"], "from_file")
+        self.assertEqual(environ["DOCUMENT_VALUE"], "from_env")
+
     def test_users_can_have_different_source_sets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1160,10 +1220,11 @@ class WatcherHelpersTest(unittest.TestCase):
         }
         with (
             patch.dict("os.environ", environment, clear=True),
-            patch.object(mqtt_trigger, "load_environment"),
             patch("builtins.print"),
         ):
-            self.assertEqual(mqtt_trigger.main(), 1)
+            provider = FakeConfigProvider()
+            self.assertEqual(mqtt_trigger.main(provider), 1)
+            self.assertTrue(provider.loaded)
 
     def test_mqtt_publish_status_sends_json_to_status_topic(self) -> None:
         client = FakeMqttStatusClient()

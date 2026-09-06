@@ -6,6 +6,7 @@ import os
 import re
 import shlex
 from pathlib import Path
+from typing import MutableMapping, Protocol
 
 from outputs.base import OutputConfig
 from sources.base import SourceAccountConfig
@@ -25,7 +26,20 @@ class ConfigurationError(RuntimeError):
     """Raised when a local configuration value is invalid."""
 
 
-def _fallback_load_dotenv(path: Path) -> None:
+class ConfigProvider(Protocol):
+    """Source of fully assembled document account configuration."""
+
+    def load(self) -> None:
+        """Load configuration backing data before account resolution."""
+
+    def get_source_account(self, name: str) -> SourceAccountConfig:
+        """Return one configured source account by account name or user:source."""
+
+    def get_source_accounts(self) -> list[SourceAccountConfig]:
+        """Return all configured source accounts."""
+
+
+def _fallback_load_dotenv(path: Path, environ: MutableMapping[str, str]) -> None:
     """Load a minimal KEY=VALUE .env file without overriding environment."""
     if not path.exists():
         return
@@ -35,23 +49,13 @@ def _fallback_load_dotenv(path: Path) -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip()
-        if not key or key in os.environ:
+        if not key or key in environ:
             continue
         try:
             parsed = shlex.split(value, comments=False, posix=True)
         except ValueError:
             parsed = [value.strip()]
-        os.environ[key] = parsed[0] if parsed else ""
-
-
-def load_environment() -> None:
-    """Load the optional local .env file without overriding real environment variables."""
-    if ENV_FILE.exists():
-        ENV_FILE.chmod(0o600)
-    if _load_dotenv is not None:
-        _load_dotenv(ENV_FILE)
-    else:
-        _fallback_load_dotenv(ENV_FILE)
+        environ[key] = parsed[0] if parsed else ""
 
 
 def _validate_name(value: str, variable: str, kind: str) -> str:
@@ -63,13 +67,13 @@ def _validate_name(value: str, variable: str, kind: str) -> str:
     return result
 
 
-def _path_value(raw_value: str, default: Path) -> Path:
+def _path_value(raw_value: str, default: Path, root: Path) -> Path:
     value = raw_value.strip()
     if not value:
         return default
     path = Path(value).expanduser()
     if not path.is_absolute():
-        path = ROOT / path
+        path = root / path
     return path
 
 
@@ -104,51 +108,10 @@ def _output_prefix(user: str, source: str, output_name: str) -> str:
     return f"{_account_prefix(user, source)}OUTPUT_{output_name.upper()}_"
 
 
-def _raw_prefixed_settings(prefix: str) -> dict[str, str]:
-    return {
-        variable[len(prefix) :].lower(): value
-        for variable, value in os.environ.items()
-        if variable.startswith(prefix)
-    }
-
-
-def configured_users() -> list[str]:
-    """Return configured document users."""
-    raw_users = os.environ.get("DOCUMENT_USERS", "").strip()
-    if not raw_users:
-        raise ConfigurationError("DOCUMENT_USERS is not set.")
-    return _parse_name_list(raw_users, "DOCUMENT_USERS", "user")
-
-
 def _known_source_names() -> set[str]:
     from sources import available_source_names
 
     return available_source_names()
-
-
-def _infer_user_sources(user: str) -> list[str]:
-    """Infer a user's sources from registered plugin names and env prefixes."""
-    sources: list[str] = []
-    for source in sorted(_known_source_names()):
-        prefix = _account_prefix(user, source)
-        if any(variable.startswith(prefix) for variable in os.environ):
-            sources.append(source)
-    return sources
-
-
-def configured_user_sources(user: str) -> list[str]:
-    """Return sources configured for one user."""
-    variable = f"{_user_prefix(user)}SOURCES"
-    raw_sources = os.environ.get(variable, "").strip()
-    if raw_sources:
-        return _parse_name_list(raw_sources, variable, "source")
-
-    sources = _infer_user_sources(user)
-    if not sources:
-        raise ConfigurationError(
-            f"{variable} is not set and no known source plugin settings were found for user {user!r}."
-        )
-    return sources
 
 
 def get_bool(name: str, default: bool = False) -> bool:
@@ -207,76 +170,162 @@ def _parse_output_specs(raw_value: str, variable: str) -> list[tuple[str, str]]:
     return outputs
 
 
-def _output_configs(user: str, source: str) -> tuple[OutputConfig, ...]:
-    variable = f"{_account_prefix(user, source)}OUTPUTS"
-    raw_specs = os.environ.get(variable, "folder")
-    configs: list[OutputConfig] = []
-    for output_name, output_type in _parse_output_specs(raw_specs, variable):
-        configs.append(
-            OutputConfig(
-                name=output_name,
-                type=output_type,
-                settings=_raw_prefixed_settings(
-                    _output_prefix(user, source, output_name)
-                ),
+class EnvConfigProvider:
+    """Build account configuration from environment variables and an optional .env file."""
+
+    def __init__(
+        self,
+        environ: MutableMapping[str, str] | None = None,
+        root: Path | None = None,
+        env_file: Path | None = None,
+    ) -> None:
+        self.environ = os.environ if environ is None else environ
+        self.root = ROOT if root is None else root
+        self.env_file = self.root / ".env" if env_file is None else env_file
+
+    def load(self) -> None:
+        """Load the optional local .env file without overriding real variables."""
+        if self.env_file.exists():
+            self.env_file.chmod(0o600)
+        if _load_dotenv is not None and self.environ is os.environ:
+            _load_dotenv(self.env_file)
+        else:
+            _fallback_load_dotenv(self.env_file, self.environ)
+
+    def _raw_prefixed_settings(self, prefix: str) -> dict[str, str]:
+        return {
+            variable[len(prefix) :].lower(): value
+            for variable, value in self.environ.items()
+            if variable.startswith(prefix)
+        }
+
+    def configured_users(self) -> list[str]:
+        """Return configured document users."""
+        raw_users = self.environ.get("DOCUMENT_USERS", "").strip()
+        if not raw_users:
+            raise ConfigurationError("DOCUMENT_USERS is not set.")
+        return _parse_name_list(raw_users, "DOCUMENT_USERS", "user")
+
+    def _infer_user_sources(self, user: str) -> list[str]:
+        """Infer a user's sources from registered plugin names and env prefixes."""
+        sources: list[str] = []
+        for source in sorted(_known_source_names()):
+            prefix = _account_prefix(user, source)
+            if any(variable.startswith(prefix) for variable in self.environ):
+                sources.append(source)
+        return sources
+
+    def configured_user_sources(self, user: str) -> list[str]:
+        """Return sources configured for one user."""
+        variable = f"{_user_prefix(user)}SOURCES"
+        raw_sources = self.environ.get(variable, "").strip()
+        if raw_sources:
+            return _parse_name_list(raw_sources, variable, "source")
+
+        sources = self._infer_user_sources(user)
+        if not sources:
+            raise ConfigurationError(
+                f"{variable} is not set and no known source plugin settings were found for user {user!r}."
             )
+        return sources
+
+    def _output_configs(self, user: str, source: str) -> tuple[OutputConfig, ...]:
+        variable = f"{_account_prefix(user, source)}OUTPUTS"
+        raw_specs = self.environ.get(variable, "folder")
+        configs: list[OutputConfig] = []
+        for output_name, output_type in _parse_output_specs(raw_specs, variable):
+            configs.append(
+                OutputConfig(
+                    name=output_name,
+                    type=output_type,
+                    settings=self._raw_prefixed_settings(
+                        _output_prefix(user, source, output_name)
+                    ),
+                )
+            )
+        return tuple(configs)
+
+    def _source_settings(self, user: str, source: str) -> dict[str, str]:
+        settings = self._raw_prefixed_settings(_account_prefix(user, source))
+        return {
+            key: value
+            for key, value in settings.items()
+            if key not in {"sources", "outputs", "runtime_dir", "max_document_mb"}
+            and not key.startswith("output_")
+        }
+
+    def _source_account(self, user: str, source: str) -> SourceAccountConfig:
+        account_name = _source_account_name(user, source)
+        prefix = _account_prefix(user, source)
+        settings = self._raw_prefixed_settings(prefix)
+        runtime_dir = _path_value(
+            settings.get("runtime_dir", ""),
+            self.root / "accounts" / account_name,
+            self.root,
         )
-    return tuple(configs)
+        maximum_document_mb = _positive_int_setting(
+            settings, "max_document_mb", f"{prefix}MAX_DOCUMENT_MB", 100
+        )
+        return SourceAccountConfig(
+            name=account_name,
+            source=source,
+            maximum_document_mb=maximum_document_mb,
+            runtime_dir=runtime_dir,
+            state_file=runtime_dir / "state.json",
+            lock_file=runtime_dir / ".run.lock",
+            source_settings=self._source_settings(user, source),
+            output_configs=self._output_configs(user, source),
+        )
+
+    def get_source_account(self, name: str) -> SourceAccountConfig:
+        """Return one configured source account by account name or user:source."""
+        text = name.strip().lower()
+        if ":" in text:
+            raw_user, raw_source = text.split(":", 1)
+            user = _validate_name(raw_user, "account", "user")
+            source = _validate_name(raw_source, "account", "source")
+            return self._source_account(user, source)
+
+        account_name = _validate_name(text, "account", "account")
+        for account in self.get_source_accounts():
+            if account.name == account_name:
+                return account
+        raise ConfigurationError(f"Unknown configured account {name!r}.")
+
+    def get_source_accounts(self) -> list[SourceAccountConfig]:
+        """Return all configured source accounts."""
+        accounts: list[SourceAccountConfig] = []
+        for user in self.configured_users():
+            for source in self.configured_user_sources(user):
+                accounts.append(self._source_account(user, source))
+        return accounts
 
 
-def _source_settings(user: str, source: str) -> dict[str, str]:
-    settings = _raw_prefixed_settings(_account_prefix(user, source))
-    return {
-        key: value
-        for key, value in settings.items()
-        if key not in {"sources", "outputs", "runtime_dir", "max_document_mb"}
-        and not key.startswith("output_")
-    }
+def default_config_provider() -> EnvConfigProvider:
+    """Return the default file/environment-backed config provider."""
+    return EnvConfigProvider()
 
 
-def _source_account(user: str, source: str) -> SourceAccountConfig:
-    account_name = _source_account_name(user, source)
-    prefix = _account_prefix(user, source)
-    settings = _raw_prefixed_settings(prefix)
-    runtime_dir = _path_value(
-        settings.get("runtime_dir", ""),
-        ROOT / "accounts" / account_name,
-    )
-    maximum_document_mb = _positive_int_setting(
-        settings, "max_document_mb", f"{prefix}MAX_DOCUMENT_MB", 100
-    )
-    return SourceAccountConfig(
-        name=account_name,
-        source=source,
-        maximum_document_mb=maximum_document_mb,
-        runtime_dir=runtime_dir,
-        state_file=runtime_dir / "state.json",
-        lock_file=runtime_dir / ".run.lock",
-        source_settings=_source_settings(user, source),
-        output_configs=_output_configs(user, source),
-    )
+def load_environment() -> None:
+    """Load the optional local .env file without overriding real environment variables."""
+    default_config_provider().load()
+
+
+def configured_users() -> list[str]:
+    """Return configured document users from the default provider."""
+    return default_config_provider().configured_users()
+
+
+def configured_user_sources(user: str) -> list[str]:
+    """Return sources configured for one user from the default provider."""
+    return default_config_provider().configured_user_sources(user)
 
 
 def get_source_account(name: str) -> SourceAccountConfig:
     """Return one configured source account by account name or user:source."""
-    text = name.strip().lower()
-    if ":" in text:
-        raw_user, raw_source = text.split(":", 1)
-        user = _validate_name(raw_user, "account", "user")
-        source = _validate_name(raw_source, "account", "source")
-        return _source_account(user, source)
-
-    account_name = _validate_name(text, "account", "account")
-    for account in get_source_accounts():
-        if account.name == account_name:
-            return account
-    raise ConfigurationError(f"Unknown configured account {name!r}.")
+    return default_config_provider().get_source_account(name)
 
 
 def get_source_accounts() -> list[SourceAccountConfig]:
     """Return all configured source accounts."""
-    accounts: list[SourceAccountConfig] = []
-    for user in configured_users():
-        for source in configured_user_sources(user):
-            accounts.append(_source_account(user, source))
-    return accounts
+    return default_config_provider().get_source_accounts()

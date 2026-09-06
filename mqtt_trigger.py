@@ -12,10 +12,9 @@ from datetime import datetime, timezone
 from typing import Mapping
 
 from config import (
+    ConfigProvider,
     ConfigurationError,
-    get_source_account,
-    get_source_accounts,
-    load_environment,
+    EnvConfigProvider,
 )
 from input_broker import InputError, PushInputBroker
 from outputs.base import OutputError
@@ -137,10 +136,12 @@ def parse_input_payload(payload: str) -> InputProvideRequest:
     return InputProvideRequest(account.strip(), fields, payload)
 
 
-def resolve_accounts(request: PollRequest) -> list[SourceAccountConfig]:
+def resolve_accounts(
+    request: PollRequest, config_provider: ConfigProvider
+) -> list[SourceAccountConfig]:
     if request.account_names is None:
-        return get_source_accounts()
-    return [get_source_account(name) for name in request.account_names]
+        return config_provider.get_source_accounts()
+    return [config_provider.get_source_account(name) for name in request.account_names]
 
 
 def describe_poll_request(request: PollRequest) -> str:
@@ -186,9 +187,10 @@ def enqueue_poll_request(
     client: object,
     jobs: "queue.Queue[SourceAccountConfig]",
     request: PollRequest,
+    config_provider: ConfigProvider,
 ) -> None:
     try:
-        accounts = resolve_accounts(request)
+        accounts = resolve_accounts(request, config_provider)
     except ConfigurationError as error:
         print(f"ERROR {error}", file=sys.stderr)
         publish_status(
@@ -289,8 +291,9 @@ def make_client() -> object:
         return mqtt.Client(client_id=client_id)
 
 
-def main() -> int:
-    load_environment()
+def main(config_provider: ConfigProvider | None = None) -> int:
+    provider = config_provider or EnvConfigProvider()
+    provider.load()
     host = os.environ.get("DOCUMENT_MQTT_HOST", "").strip()
     if not host:
         print("MQTT trigger failed: DOCUMENT_MQTT_HOST is not set.", file=sys.stderr)
@@ -388,7 +391,7 @@ def main() -> int:
                     f"MQTT trigger received on {message_topic}: "
                     f"{describe_poll_request(request)}."
                 )
-                enqueue_poll_request(client, jobs, request)
+                enqueue_poll_request(client, jobs, request, provider)
             except ConfigurationError as error:
                 print(f"Rejected MQTT trigger: {error}", file=sys.stderr)
 

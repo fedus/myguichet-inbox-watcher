@@ -14,10 +14,9 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, sync_playwright
 
 from config import (
+    ConfigProvider,
     ConfigurationError,
-    get_source_account,
-    get_source_accounts,
-    load_environment,
+    EnvConfigProvider,
 )
 from sources.myguichet.config import (
     MyGuichetAccountConfig,
@@ -113,11 +112,15 @@ def start_luxtrust_login(page: Page, username: str, password: str) -> None:
         ) from error
 
 
-def refresh_cookie(account: MyGuichetAccountConfig | None = None) -> str:
+def refresh_cookie(
+    account: MyGuichetAccountConfig | None = None,
+    config_provider: ConfigProvider | None = None,
+) -> str:
     """Log in if needed, write cookie.txt atomically, and return its value."""
-    load_environment()
+    provider = config_provider or EnvConfigProvider()
+    provider.load()
     if account is None:
-        accounts = get_source_accounts()
+        accounts = provider.get_source_accounts()
         if len(accounts) != 1:
             raise LoginError("Use --account when more than one account is configured.")
         account = myguichet_account_from_source(accounts[0])
@@ -177,22 +180,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None, config_provider: ConfigProvider | None = None
+) -> int:
     """CLI entry point for manually refreshing cookie.txt."""
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    provider = config_provider or EnvConfigProvider()
     try:
-        load_environment()
+        provider.load()
         if args.account:
-            account = myguichet_account_from_source(get_source_account(args.account))
+            account = myguichet_account_from_source(
+                provider.get_source_account(args.account)
+            )
         else:
-            accounts = get_source_accounts()
+            accounts = provider.get_source_accounts()
             if len(accounts) != 1:
                 raise LoginError(
                     "Use --account when more than one account is configured."
                 )
             account = myguichet_account_from_source(accounts[0])
         with exclusive_lock(account.lock_file):
-            refresh_cookie(account)
+            refresh_cookie(account, provider)
     except AlreadyRunning as error:
         print(str(error), file=sys.stderr)
         return 1
