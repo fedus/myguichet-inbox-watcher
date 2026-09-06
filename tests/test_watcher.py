@@ -7,6 +7,7 @@ import queue
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import nullcontext
 from pathlib import Path
@@ -160,9 +161,13 @@ class FakeHttpSession:
 class FakeMqttStatusClient:
     def __init__(self) -> None:
         self.published: list[tuple[str, str]] = []
+        self.disconnected = False
 
     def publish(self, topic: str, payload: str) -> None:
         self.published.append((topic, payload))
+
+    def disconnect(self) -> None:
+        self.disconnected = True
 
 
 class FakeConfigProvider:
@@ -830,6 +835,36 @@ class WatcherHelpersTest(unittest.TestCase):
                     )
                 )
 
+    def test_push_input_broker_close_aborts_pending_request(self) -> None:
+        broker = PushInputBroker(early_answer_ttl_seconds=10)
+        errors: "queue.Queue[str]" = queue.Queue()
+
+        def wait_for_input() -> None:
+            try:
+                broker.request_input(
+                    InputChallenge(
+                        account_name="alice_dkv",
+                        source="dkv",
+                        kind="otp",
+                        prompt="Enter the one-time code",
+                        timeout_seconds=10,
+                    )
+                )
+            except InputUnavailableError as error:
+                errors.put(str(error))
+
+        with patch("builtins.print"):
+            thread = threading.Thread(target=wait_for_input)
+            thread.start()
+            time.sleep(0.05)
+            broker.close("Runner is shutting down.")
+            thread.join(timeout=1)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors.get_nowait(), "Runner is shutting down.")
+        with self.assertRaises(InputUnavailableError):
+            broker.provide("alice_dkv", {"code": "123456"})
+
     def test_push_input_broker_handles_multiple_pending_accounts(self) -> None:
         broker = PushInputBroker(early_answer_ttl_seconds=10)
         results: "queue.Queue[tuple[str, dict[str, str]]]" = queue.Queue()
@@ -1265,13 +1300,15 @@ class WatcherHelpersTest(unittest.TestCase):
                 state_file=root / "state.json",
                 lock_file=root / ".run.lock",
             )
-            jobs: "queue.Queue[SourceAccountConfig]" = queue.Queue()
+            jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
             broker = PushInputBroker()
             client = FakeMqttStatusClient()
+            shutdown_event = threading.Event()
+            worker_state = mqtt_trigger.WorkerState()
 
             worker_thread = threading.Thread(
                 target=mqtt_trigger.worker,
-                args=(client, jobs, broker),
+                args=(client, jobs, broker, shutdown_event, worker_state),
                 daemon=True,
             )
             with (
@@ -1284,6 +1321,8 @@ class WatcherHelpersTest(unittest.TestCase):
             ):
                 worker_thread.start()
                 jobs.put(account)
+                jobs.join()
+                jobs.put(None)
                 jobs.join()
 
         payloads = [json.loads(payload) for _, payload in client.published]
@@ -1306,13 +1345,15 @@ class WatcherHelpersTest(unittest.TestCase):
                 state_file=root / "state.json",
                 lock_file=root / ".run.lock",
             )
-            jobs: "queue.Queue[SourceAccountConfig]" = queue.Queue()
+            jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
             broker = PushInputBroker()
             client = FakeMqttStatusClient()
+            shutdown_event = threading.Event()
+            worker_state = mqtt_trigger.WorkerState()
 
             worker_thread = threading.Thread(
                 target=mqtt_trigger.worker,
-                args=(client, jobs, broker),
+                args=(client, jobs, broker, shutdown_event, worker_state),
                 daemon=True,
             )
             with (
@@ -1330,6 +1371,8 @@ class WatcherHelpersTest(unittest.TestCase):
                 worker_thread.start()
                 jobs.put(account)
                 jobs.join()
+                jobs.put(None)
+                jobs.join()
 
         payload = json.loads(client.published[-1][1])
         self.assertEqual(payload["event"], "poll.finished")
@@ -1338,6 +1381,88 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(payload["source"], "dkv")
         self.assertEqual(payload["error_type"], "SourceError")
         self.assertEqual(payload["error_message"], "source unavailable")
+
+    def test_mqtt_request_shutdown_publishes_stopping_status(self) -> None:
+        client = FakeMqttStatusClient()
+        broker = PushInputBroker()
+        shutdown_event = threading.Event()
+        worker_state = mqtt_trigger.WorkerState()
+        account = SourceAccountConfig(
+            name="alice_dkv",
+            source="dkv",
+            maximum_document_mb=100,
+            runtime_dir=Path("/tmp/alice_dkv"),
+            state_file=Path("/tmp/alice_dkv/state.json"),
+            lock_file=Path("/tmp/alice_dkv/.run.lock"),
+        )
+        worker_state.start(account)
+
+        with (
+            patch.dict(
+                "os.environ",
+                {"DOCUMENT_MQTT_STATUS_TOPIC": "documents/poll/status"},
+            ),
+            patch("builtins.print"),
+        ):
+            mqtt_trigger.request_shutdown(
+                client, broker, shutdown_event, worker_state, "SIGTERM"
+            )
+
+        self.assertTrue(shutdown_event.is_set())
+        self.assertFalse(client.disconnected)
+        with self.assertRaises(InputUnavailableError):
+            broker.provide("alice_dkv", {"code": "123456"})
+        payload = json.loads(client.published[-1][1])
+        self.assertEqual(payload["event"], "runner.stopping")
+        self.assertEqual(payload["status"], "stopping")
+        self.assertEqual(payload["signal"], "SIGTERM")
+        self.assertEqual(payload["active_polls"], 1)
+        self.assertEqual(payload["active_accounts"], ["alice_dkv"])
+
+    def test_mqtt_worker_skips_queued_poll_during_shutdown(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_dkv",
+                source="dkv",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+            )
+            jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
+            broker = PushInputBroker()
+            client = FakeMqttStatusClient()
+            shutdown_event = threading.Event()
+            shutdown_event.set()
+            worker_state = mqtt_trigger.WorkerState()
+
+            worker_thread = threading.Thread(
+                target=mqtt_trigger.worker,
+                args=(client, jobs, broker, shutdown_event, worker_state),
+                daemon=True,
+            )
+            with (
+                patch.object(mqtt_trigger, "poll_account") as mocked,
+                patch.dict(
+                    "os.environ",
+                    {"DOCUMENT_MQTT_STATUS_TOPIC": "documents/poll/status"},
+                ),
+                patch("builtins.print"),
+            ):
+                worker_thread.start()
+                jobs.put(account)
+                jobs.join()
+                jobs.put(None)
+                jobs.join()
+
+        mocked.assert_not_called()
+        payload = json.loads(client.published[-1][1])
+        self.assertEqual(payload["event"], "poll.finished")
+        self.assertEqual(payload["status"], "skipped")
+        self.assertEqual(payload["account"], "alice_dkv")
+        self.assertEqual(payload["source"], "dkv")
+        self.assertEqual(payload["error_type"], mqtt_trigger.SHUTDOWN_ERROR_TYPE)
 
     def test_mqtt_worker_passes_push_input_broker_to_poll_account(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1350,18 +1475,22 @@ class WatcherHelpersTest(unittest.TestCase):
                 state_file=root / "state.json",
                 lock_file=root / ".run.lock",
             )
-            jobs: "queue.Queue[SourceAccountConfig]" = queue.Queue()
+            jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
             broker = PushInputBroker()
+            shutdown_event = threading.Event()
+            worker_state = mqtt_trigger.WorkerState()
 
             worker_thread = threading.Thread(
                 target=mqtt_trigger.worker,
-                args=(object(), jobs, broker),
+                args=(object(), jobs, broker, shutdown_event, worker_state),
                 daemon=True,
             )
             with patch.object(mqtt_trigger, "poll_account", return_value=7) as mocked:
                 with patch("builtins.print"):
                     worker_thread.start()
                     jobs.put(account)
+                    jobs.join()
+                    jobs.put(None)
                     jobs.join()
 
             mocked.assert_called_once_with(account, input_broker=broker)

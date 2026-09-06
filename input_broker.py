@@ -98,6 +98,7 @@ class PushInputBroker:
         self._condition = threading.Condition()
         self._answers: dict[str, tuple[float, dict[str, str]]] = {}
         self._waiting: dict[str, InputChallenge] = {}
+        self._closed_reason: str | None = None
 
     @staticmethod
     def _key(account_name: str) -> str:
@@ -148,6 +149,8 @@ class PushInputBroker:
         if ttl <= 0:
             raise InputTimeoutError("Input answer TTL must be positive.")
         with self._condition:
+            if self._closed_reason is not None:
+                raise InputUnavailableError(self._closed_reason)
             self._discard_expired_locked()
             self._answers[key] = (time.monotonic() + ttl, normalized)
             self._condition.notify_all()
@@ -181,6 +184,9 @@ class PushInputBroker:
             )
             try:
                 while True:
+                    if self._closed_reason is not None:
+                        raise InputUnavailableError(self._closed_reason)
+
                     answer = self._answers.pop(key, None)
                     if answer is not None:
                         _, fields = answer
@@ -201,3 +207,9 @@ class PushInputBroker:
                     self._discard_expired_locked()
             finally:
                 self._waiting.pop(key, None)
+
+    def close(self, reason: str = "Input broker closed.") -> None:
+        """Abort current and future pushed-input requests."""
+        with self._condition:
+            self._closed_reason = reason
+            self._condition.notify_all()

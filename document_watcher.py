@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
+import threading
 
 from config import (
     ConfigProvider,
@@ -27,6 +29,28 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def install_shutdown_handlers(
+    shutdown_event: threading.Event,
+) -> tuple[signal.Handlers, signal.Handlers]:
+    """Handle the first stop signal gracefully and let a second one interrupt."""
+
+    def handle_signal(signum: int, frame: object) -> None:
+        del frame
+        signal_name = signal.Signals(signum).name
+        if shutdown_event.is_set():
+            raise KeyboardInterrupt
+        shutdown_event.set()
+        print(
+            f"Shutdown requested by {signal_name}; finishing the current account "
+            "before exiting.",
+            file=sys.stderr,
+        )
+
+    previous_sigterm = signal.signal(signal.SIGTERM, handle_signal)
+    previous_sigint = signal.signal(signal.SIGINT, handle_signal)
+    return previous_sigterm, previous_sigint
+
+
 def main(
     argv: list[str] | None = None, config_provider: ConfigProvider | None = None
 ) -> int:
@@ -35,6 +59,9 @@ def main(
     provider = config_provider or EnvConfigProvider()
     total_messages = 0
     failed = False
+    shutdown_event = threading.Event()
+    previous_sigterm: signal.Handlers | None = None
+    previous_sigint: signal.Handlers | None = None
     try:
         provider.load()
         accounts = (
@@ -42,7 +69,11 @@ def main(
             if args.account
             else provider.get_source_accounts()
         )
+        previous_sigterm, previous_sigint = install_shutdown_handlers(shutdown_event)
         for account in accounts:
+            if shutdown_event.is_set():
+                print(f"[{account.name}] Skipped because shutdown was requested.")
+                break
             try:
                 total_messages += poll_account(account)
             except AlreadyRunning as error:
@@ -60,6 +91,14 @@ def main(
     except ConfigurationError as error:
         print(f"Watcher failed: {error}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("Watcher interrupted.", file=sys.stderr)
+        return 130
+    finally:
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
+        if previous_sigint is not None:
+            signal.signal(signal.SIGINT, previous_sigint)
     if failed:
         return 1
     return total_messages

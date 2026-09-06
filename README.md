@@ -302,6 +302,10 @@ Successful messages are checkpointed. The delivery model is **at least once**:
 if a process is interrupted after delivery but before checkpointing, that
 message can be delivered again on the next run.
 
+In one-shot mode, the first `SIGTERM` or `CTRL-C` asks the watcher to finish the
+current account and then stop before starting another account. A second signal
+interrupts immediately.
+
 For MyGuichet login troubleshooting only:
 
 ```sh
@@ -324,6 +328,7 @@ DOCUMENT_MQTT_WORKERS=1
 DOCUMENT_MQTT_INPUT_TOPIC=documents/input/provide
 DOCUMENT_MQTT_INPUT_TTL_SECONDS=300
 DOCUMENT_MQTT_STATUS_TOPIC=documents/poll/status
+DOCUMENT_SHUTDOWN_TIMEOUT_SECONDS=30
 ```
 
 Run it with:
@@ -388,6 +393,12 @@ Errors use the same shape with `"status":"error"` plus `error_type` and
 
 In Docker, set `DOCUMENT_RUN_MODE=mqtt` in `.env` or before `docker compose up`
 to run the MQTT subscriber instead of a one-shot poll.
+
+The MQTT runner handles `SIGTERM` and `CTRL-C` gracefully. It stops accepting
+new triggers, aborts pending external-input waits, lets active polls finish for
+up to `DOCUMENT_SHUTDOWN_TIMEOUT_SECONDS`, and publishes `runner.stopping` /
+`runner.stopped` status events when a status topic is configured. The Compose
+file gives the container a 45 second stop grace period by default.
 
 ## Run Regularly
 
