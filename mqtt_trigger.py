@@ -20,6 +20,7 @@ from config import (
 )
 from input_broker import InputError, PushInputBroker
 from outputs.base import OutputError
+from runtime_state import RuntimeState, runtime_state as default_runtime_state
 from sources.base import SourceAccountConfig, SourceError
 from storage import AlreadyRunning
 from watcher_core import StateError, poll_account
@@ -230,10 +231,12 @@ def enqueue_poll_request(
     request: PollRequest,
     config_provider: ConfigProvider,
     shutdown_event: threading.Event,
+    runtime_state: RuntimeState,
 ) -> None:
     if shutdown_event.is_set():
         message = "Runner is shutting down; MQTT trigger was ignored."
         print(message, file=sys.stderr)
+        runtime_state.record_event("trigger.rejected", "error", message=message)
         publish_status(
             client,
             status_event("trigger.rejected", "error", **shutdown_fields(message)),
@@ -252,10 +255,22 @@ def enqueue_poll_request(
 
     account_names = ", ".join(account.name for account in accounts)
     print(f"MQTT trigger resolved to account(s): {account_names}")
+    runtime_state.record_event(
+        "trigger.accepted",
+        "ok",
+        details={"accounts": [account.name for account in accounts]},
+    )
     for account in accounts:
         if shutdown_event.is_set():
             message = "Runner is shutting down before account could be queued."
             print(f"[{account.name}] {message}", file=sys.stderr)
+            runtime_state.poll_finished(
+                account.name,
+                account.source,
+                "skipped",
+                error_type=SHUTDOWN_ERROR_TYPE,
+                error_message=message,
+            )
             publish_status(
                 client,
                 status_event(
@@ -269,6 +284,12 @@ def enqueue_poll_request(
             continue
         jobs.put(account)
         print(f"[{account.name}] Poll queued.")
+        runtime_state.record_event(
+            "poll.queued",
+            "queued",
+            account=account.name,
+            source=account.source,
+        )
         publish_status(
             client,
             status_event(
@@ -286,6 +307,7 @@ def worker(
     input_broker: PushInputBroker,
     shutdown_event: threading.Event,
     worker_state: WorkerState,
+    runtime_state: RuntimeState,
 ) -> None:
     while True:
         account = jobs.get()
@@ -296,6 +318,13 @@ def worker(
             if shutdown_event.is_set():
                 message = "Runner is shutting down before poll started."
                 print(f"[{account.name}] {message}")
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "skipped",
+                    error_type=SHUTDOWN_ERROR_TYPE,
+                    error_message=message,
+                )
                 publish_status(
                     client,
                     status_event(
@@ -310,6 +339,7 @@ def worker(
 
             worker_state.start(account)
             print(f"[{account.name}] Poll started.")
+            runtime_state.poll_started(account.name, account.source)
             publish_status(
                 client,
                 status_event(
@@ -323,6 +353,13 @@ def worker(
                 count = poll_account(account, input_broker=input_broker)
             except AlreadyRunning as error:
                 print(f"[{account.name}] {error}")
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "skipped",
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
                 event = status_event(
                     "poll.finished",
                     "skipped",
@@ -339,6 +376,13 @@ def worker(
                 StateError,
             ) as error:
                 print(f"[{account.name}] Watcher failed: {error}", file=sys.stderr)
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "error",
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
                 event = status_event(
                     "poll.finished",
                     "error",
@@ -348,6 +392,12 @@ def worker(
                 )
             else:
                 print(f"[{account.name}] Poll finished: {count} new message(s).")
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "ok",
+                    new_messages=count,
+                )
                 event = status_event(
                     "poll.finished",
                     "ok",
@@ -367,6 +417,7 @@ def request_shutdown(
     input_broker: PushInputBroker,
     shutdown_event: threading.Event,
     worker_state: WorkerState,
+    runtime_state: RuntimeState,
     signal_name: str,
 ) -> None:
     """Start runner shutdown and unblock MQTT/input waits."""
@@ -378,6 +429,15 @@ def request_shutdown(
     print(
         f"Shutdown requested by {signal_name}; waiting for "
         f"{len(active_accounts)} active poll(s) to finish."
+    )
+    runtime_state.record_event(
+        "runner.stopping",
+        "stopping",
+        details={
+            "signal": signal_name,
+            "active_polls": len(active_accounts),
+            "active_accounts": active_accounts,
+        },
     )
     publish_status(
         client,
@@ -396,6 +456,7 @@ def wait_for_workers(
     jobs: "queue.Queue[SourceAccountConfig | None]",
     workers: list[threading.Thread],
     worker_state: WorkerState,
+    runtime_state: RuntimeState,
     timeout_seconds: int,
 ) -> None:
     """Wait briefly for workers and report whether any polls remain active."""
@@ -420,6 +481,15 @@ def wait_for_workers(
         )
     else:
         print("MQTT runner stopped.")
+    runtime_state.record_event(
+        "runner.stopped",
+        status,
+        details={
+            "active_polls": len(active_accounts),
+            "active_accounts": active_accounts,
+            "timed_out": timed_out,
+        },
+    )
     publish_status(
         client,
         status_event(
@@ -449,8 +519,12 @@ def make_client() -> object:
         return mqtt.Client(client_id=client_id)
 
 
-def main(config_provider: ConfigProvider | None = None) -> int:
+def main(
+    config_provider: ConfigProvider | None = None,
+    runtime_state: RuntimeState | None = None,
+) -> int:
     provider = config_provider or EnvConfigProvider()
+    state = runtime_state or default_runtime_state
     provider.load()
     host = os.environ.get("DOCUMENT_MQTT_HOST", "").strip()
     if not host:
@@ -480,7 +554,7 @@ def main(config_provider: ConfigProvider | None = None) -> int:
             )
 
         jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
-        input_broker = PushInputBroker(mqtt_input_ttl_seconds())
+        input_broker = PushInputBroker(mqtt_input_ttl_seconds(), runtime_state=state)
         shutdown_event = threading.Event()
         worker_state = WorkerState()
         workers: list[threading.Thread] = []
@@ -494,7 +568,14 @@ def main(config_provider: ConfigProvider | None = None) -> int:
         for _ in range(worker_count):
             worker_thread = threading.Thread(
                 target=worker,
-                args=(client, jobs, input_broker, shutdown_event, worker_state),
+                args=(
+                    client,
+                    jobs,
+                    input_broker,
+                    shutdown_event,
+                    worker_state,
+                    state,
+                ),
                 daemon=True,
             )
             workers.append(worker_thread)
@@ -504,7 +585,12 @@ def main(config_provider: ConfigProvider | None = None) -> int:
             del frame
             signal_name = signal.Signals(signum).name
             request_shutdown(
-                client, input_broker, shutdown_event, worker_state, signal_name
+                client,
+                input_broker,
+                shutdown_event,
+                worker_state,
+                state,
+                signal_name,
             )
 
         previous_sigterm = signal.signal(signal.SIGTERM, handle_signal)
@@ -554,6 +640,12 @@ def main(config_provider: ConfigProvider | None = None) -> int:
                     input_broker.provide(request.account_name, request.fields)
                 except (ConfigurationError, InputError) as error:
                     print(f"Rejected MQTT input: {error}", file=sys.stderr)
+                    state.record_event(
+                        "input.rejected",
+                        "error",
+                        message=str(error),
+                        details={"error_type": type(error).__name__},
+                    )
                     event = status_event(
                         "input.rejected", "error", **error_fields(error)
                     )
@@ -562,6 +654,12 @@ def main(config_provider: ConfigProvider | None = None) -> int:
                     print(
                         f"[{request.account_name}] MQTT input accepted for "
                         f"field(s): {field_names}."
+                    )
+                    state.record_event(
+                        "input.accepted",
+                        "ok",
+                        account=request.account_name,
+                        details={"fields": sorted(request.fields)},
                     )
                     event = status_event(
                         "input.accepted",
@@ -578,7 +676,9 @@ def main(config_provider: ConfigProvider | None = None) -> int:
                     f"MQTT trigger received on {message_topic}: "
                     f"{describe_poll_request(request)}."
                 )
-                enqueue_poll_request(client, jobs, request, provider, shutdown_event)
+                enqueue_poll_request(
+                    client, jobs, request, provider, shutdown_event, state
+                )
             except ConfigurationError as error:
                 print(f"Rejected MQTT trigger: {error}", file=sys.stderr)
 
@@ -590,11 +690,18 @@ def main(config_provider: ConfigProvider | None = None) -> int:
                 client.loop(timeout=1.0)  # type: ignore[attr-defined]
         except KeyboardInterrupt:
             request_shutdown(
-                client, input_broker, shutdown_event, worker_state, "KeyboardInterrupt"
+                client,
+                input_broker,
+                shutdown_event,
+                worker_state,
+                state,
+                "KeyboardInterrupt",
             )
         finally:
             shutdown_event.set()
-            wait_for_workers(client, jobs, workers, worker_state, timeout_seconds)
+            wait_for_workers(
+                client, jobs, workers, worker_state, state, timeout_seconds
+            )
             try:
                 client.disconnect()  # type: ignore[attr-defined]
                 client.loop(timeout=1.0)  # type: ignore[attr-defined]

@@ -20,12 +20,14 @@ sys.path.insert(0, str(WATCHER_ROOT))
 import watcher_core  # noqa: E402
 import mqtt_trigger  # noqa: E402
 import config  # noqa: E402
+import api_server  # noqa: E402
 from input_broker import (  # noqa: E402
     InputChallenge,
     InputTimeoutError,
     InputUnavailableError,
     PushInputBroker,
 )
+from runtime_state import RuntimeState  # noqa: E402
 from outputs import register_output  # noqa: E402
 from outputs.base import (  # noqa: E402
     LocalDocument,
@@ -984,6 +986,91 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(environ["DOCUMENT_USERS"], "from_file")
         self.assertEqual(environ["DOCUMENT_VALUE"], "from_env")
 
+    def test_api_redacts_credential_like_settings(self) -> None:
+        result = api_server.sanitize_settings(
+            {
+                "username": "alice",
+                "password": "secret",
+                "refresh_token": "token",
+                "space_id": "123",
+            }
+        )
+
+        self.assertEqual(result["username"], "***")
+        self.assertEqual(result["password"], "***")
+        self.assertEqual(result["refresh_token"], "***")
+        self.assertEqual(result["space_id"], "123")
+
+    def test_api_exposes_configured_accounts_and_runtime_status(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_dkv",
+                source="dkv",
+                maximum_document_mb=100,
+                runtime_dir=root / "accounts" / "alice_dkv",
+                state_file=root / "accounts" / "alice_dkv" / "state.json",
+                lock_file=root / "accounts" / "alice_dkv" / ".run.lock",
+                source_settings={"username": "alice", "otp_type": "SMS"},
+                output_configs=(
+                    OutputConfig(
+                        "local",
+                        "folder",
+                        {"directory": str(root / "downloads" / "alice_dkv")},
+                    ),
+                ),
+            )
+            state = RuntimeState()
+            state.poll_started("alice_dkv", "dkv")
+            app = api_server.create_app(FakeConfigProvider([account]), state)
+
+            account_payload = api_server.account_payload(account)
+            status = state.snapshot()
+            openapi_paths = app.openapi()["paths"]
+
+        self.assertIn("/api/health", openapi_paths)
+        self.assertIn("/api/plugins", openapi_paths)
+        self.assertIn("/api/accounts", openapi_paths)
+        self.assertIn("/api/status", openapi_paths)
+        self.assertEqual(account_payload["name"], "alice_dkv")
+        self.assertEqual(account_payload["source_settings"]["username"], "***")
+        self.assertEqual(account_payload["source_settings"]["otp_type"], "SMS")
+        self.assertEqual(status["active_polls"][0]["account"], "alice_dkv")
+        self.assertIn("dkv", api_server.available_source_names())
+        self.assertIn("folder", api_server.available_output_names())
+
+    def test_api_lists_folder_output_documents(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            download_dir = root / "downloads" / "alice_dkv"
+            download_dir.mkdir(parents=True)
+            (download_dir / "refund.pdf").write_bytes(b"%PDF")
+            account = SourceAccountConfig(
+                name="alice_dkv",
+                source="dkv",
+                maximum_document_mb=100,
+                runtime_dir=root / "accounts" / "alice_dkv",
+                state_file=root / "accounts" / "alice_dkv" / "state.json",
+                lock_file=root / "accounts" / "alice_dkv" / ".run.lock",
+                output_configs=(
+                    OutputConfig(
+                        "local",
+                        "folder",
+                        {"directory": str(download_dir)},
+                    ),
+                ),
+            )
+            documents = api_server.list_downloaded_documents(
+                [account], "alice_dkv", 50
+            )
+
+        self.assertEqual(len(documents), 1)
+        self.assertEqual(documents[0]["account"], "alice_dkv")
+        self.assertEqual(documents[0]["source"], "dkv")
+        self.assertEqual(documents[0]["filename"], "refund.pdf")
+        self.assertEqual(documents[0]["size_bytes"], 4)
+        self.assertIn("modified_at", documents[0])
+
     def test_users_can_have_different_source_sets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1305,10 +1392,11 @@ class WatcherHelpersTest(unittest.TestCase):
             client = FakeMqttStatusClient()
             shutdown_event = threading.Event()
             worker_state = mqtt_trigger.WorkerState()
+            state = RuntimeState()
 
             worker_thread = threading.Thread(
                 target=mqtt_trigger.worker,
-                args=(client, jobs, broker, shutdown_event, worker_state),
+                args=(client, jobs, broker, shutdown_event, worker_state, state),
                 daemon=True,
             )
             with (
@@ -1333,6 +1421,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(payloads[-1]["account"], "alice_myguichet")
         self.assertEqual(payloads[-1]["source"], "myguichet")
         self.assertEqual(payloads[-1]["new_messages"], 7)
+        self.assertEqual(state.snapshot()["recent_events"][-1]["status"], "ok")
 
     def test_mqtt_worker_publishes_json_poll_error_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1350,10 +1439,11 @@ class WatcherHelpersTest(unittest.TestCase):
             client = FakeMqttStatusClient()
             shutdown_event = threading.Event()
             worker_state = mqtt_trigger.WorkerState()
+            state = RuntimeState()
 
             worker_thread = threading.Thread(
                 target=mqtt_trigger.worker,
-                args=(client, jobs, broker, shutdown_event, worker_state),
+                args=(client, jobs, broker, shutdown_event, worker_state, state),
                 daemon=True,
             )
             with (
@@ -1381,12 +1471,14 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(payload["source"], "dkv")
         self.assertEqual(payload["error_type"], "SourceError")
         self.assertEqual(payload["error_message"], "source unavailable")
+        self.assertEqual(state.snapshot()["recent_events"][-1]["status"], "error")
 
     def test_mqtt_request_shutdown_publishes_stopping_status(self) -> None:
         client = FakeMqttStatusClient()
         broker = PushInputBroker()
         shutdown_event = threading.Event()
         worker_state = mqtt_trigger.WorkerState()
+        state = RuntimeState()
         account = SourceAccountConfig(
             name="alice_dkv",
             source="dkv",
@@ -1405,7 +1497,7 @@ class WatcherHelpersTest(unittest.TestCase):
             patch("builtins.print"),
         ):
             mqtt_trigger.request_shutdown(
-                client, broker, shutdown_event, worker_state, "SIGTERM"
+                client, broker, shutdown_event, worker_state, state, "SIGTERM"
             )
 
         self.assertTrue(shutdown_event.is_set())
@@ -1418,6 +1510,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(payload["signal"], "SIGTERM")
         self.assertEqual(payload["active_polls"], 1)
         self.assertEqual(payload["active_accounts"], ["alice_dkv"])
+        self.assertEqual(state.snapshot()["recent_events"][-1]["event"], "runner.stopping")
 
     def test_mqtt_worker_skips_queued_poll_during_shutdown(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1436,10 +1529,11 @@ class WatcherHelpersTest(unittest.TestCase):
             shutdown_event = threading.Event()
             shutdown_event.set()
             worker_state = mqtt_trigger.WorkerState()
+            state = RuntimeState()
 
             worker_thread = threading.Thread(
                 target=mqtt_trigger.worker,
-                args=(client, jobs, broker, shutdown_event, worker_state),
+                args=(client, jobs, broker, shutdown_event, worker_state, state),
                 daemon=True,
             )
             with (
@@ -1463,6 +1557,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(payload["account"], "alice_dkv")
         self.assertEqual(payload["source"], "dkv")
         self.assertEqual(payload["error_type"], mqtt_trigger.SHUTDOWN_ERROR_TYPE)
+        self.assertEqual(state.snapshot()["recent_events"][-1]["status"], "skipped")
 
     def test_mqtt_worker_passes_push_input_broker_to_poll_account(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1479,10 +1574,11 @@ class WatcherHelpersTest(unittest.TestCase):
             broker = PushInputBroker()
             shutdown_event = threading.Event()
             worker_state = mqtt_trigger.WorkerState()
+            state = RuntimeState()
 
             worker_thread = threading.Thread(
                 target=mqtt_trigger.worker,
-                args=(object(), jobs, broker, shutdown_event, worker_state),
+                args=(object(), jobs, broker, shutdown_event, worker_state, state),
                 daemon=True,
             )
             with patch.object(mqtt_trigger, "poll_account", return_value=7) as mocked:

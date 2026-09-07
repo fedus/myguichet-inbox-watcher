@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from typing import Protocol
 from uuid import uuid4
 
+from runtime_state import RuntimeState
+
 
 class InputError(RuntimeError):
     """Base class for expected external-input failures."""
@@ -93,8 +95,13 @@ class CliInputBroker:
 class PushInputBroker:
     """Accept externally pushed answers keyed by account name."""
 
-    def __init__(self, early_answer_ttl_seconds: int = 300) -> None:
+    def __init__(
+        self,
+        early_answer_ttl_seconds: int = 300,
+        runtime_state: RuntimeState | None = None,
+    ) -> None:
         self.early_answer_ttl_seconds = early_answer_ttl_seconds
+        self.runtime_state = runtime_state
         self._condition = threading.Condition()
         self._answers: dict[str, tuple[float, dict[str, str]]] = {}
         self._waiting: dict[str, InputChallenge] = {}
@@ -182,23 +189,69 @@ class PushInputBroker:
                 f"({challenge.kind}); waiting up to {challenge.timeout_seconds}s "
                 f"for field(s): {self._field_list(challenge.fields)}."
             )
+            if self.runtime_state is not None:
+                self.runtime_state.input_requested(
+                    challenge.account_name,
+                    challenge.source,
+                    challenge.kind,
+                    challenge.fields,
+                    challenge.timeout_seconds,
+                    challenge.id,
+                )
             try:
                 while True:
                     if self._closed_reason is not None:
+                        if self.runtime_state is not None:
+                            self.runtime_state.input_finished(
+                                challenge.account_name,
+                                challenge.source,
+                                "aborted",
+                                challenge_id=challenge.id,
+                                message=self._closed_reason,
+                            )
                         raise InputUnavailableError(self._closed_reason)
 
                     answer = self._answers.pop(key, None)
                     if answer is not None:
                         _, fields = answer
-                        result = self._answer_for_challenge(challenge, fields)
+                        try:
+                            result = self._answer_for_challenge(challenge, fields)
+                        except InputUnavailableError as error:
+                            if self.runtime_state is not None:
+                                self.runtime_state.input_finished(
+                                    challenge.account_name,
+                                    challenge.source,
+                                    "error",
+                                    challenge_id=challenge.id,
+                                    message=str(error),
+                                )
+                            raise
                         print(
                             f"[{challenge.account_name}] Input challenge "
                             f"{challenge.id} answered."
                         )
+                        if self.runtime_state is not None:
+                            self.runtime_state.input_finished(
+                                challenge.account_name,
+                                challenge.source,
+                                "answered",
+                                challenge_id=challenge.id,
+                            )
                         return result
 
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
+                        if self.runtime_state is not None:
+                            self.runtime_state.input_finished(
+                                challenge.account_name,
+                                challenge.source,
+                                "timeout",
+                                challenge_id=challenge.id,
+                                message=(
+                                    f"Input timed out after "
+                                    f"{challenge.timeout_seconds} seconds."
+                                ),
+                            )
                         raise InputTimeoutError(
                             f"Input challenge {challenge.id} for {challenge.account_name} timed out "
                             f"after {challenge.timeout_seconds} seconds."

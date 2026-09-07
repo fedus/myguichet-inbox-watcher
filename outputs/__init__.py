@@ -37,6 +37,12 @@ def create_output(name: str) -> DocumentOutput:
         ) from error
 
 
+def available_output_names() -> set[str]:
+    """Return registered output adapter names."""
+    _register_built_ins()
+    return set(_OUTPUTS)
+
+
 def _register_built_ins() -> None:
     global _BUILT_INS_REGISTERED
     if _BUILT_INS_REGISTERED:

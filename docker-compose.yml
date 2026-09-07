@@ -12,8 +12,13 @@ services:
       - .env
     environment:
       DOCUMENT_RUN_MODE: ${DOCUMENT_RUN_MODE:-poll}
-    # Set DOCUMENT_RUN_MODE=mqtt in .env to keep this container subscribed to
-    # the configured broker instead of running one poll and exiting.
+      DOCUMENT_API_HOST: ${DOCUMENT_API_HOST:-0.0.0.0}
+      DOCUMENT_API_PORT: ${DOCUMENT_API_PORT:-8000}
+    # DOCUMENT_RUN_MODE values: poll, mqtt, api, watcher. "watcher" runs the
+    # read-only API and MQTT subscriber in the same container.
+
+    ports:
+      - "${DOCUMENT_API_PORT:-8000}:${DOCUMENT_API_PORT:-8000}"
 
     volumes:
       - document-watcher-accounts:/app/accounts

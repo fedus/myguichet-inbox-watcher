@@ -90,6 +90,9 @@ one-shot poll. You can also set it for a single Compose invocation:
 DOCUMENT_RUN_MODE=mqtt docker compose up document-watcher
 ```
 
+Use `DOCUMENT_RUN_MODE=api` for the read-only REST API only, or
+`DOCUMENT_RUN_MODE=watcher` to run the REST API and MQTT subscriber together.
+
 ## Configuration Model
 
 Configuration is read through a small provider contract. The default provider is
@@ -329,6 +332,8 @@ DOCUMENT_MQTT_INPUT_TOPIC=documents/input/provide
 DOCUMENT_MQTT_INPUT_TTL_SECONDS=300
 DOCUMENT_MQTT_STATUS_TOPIC=documents/poll/status
 DOCUMENT_SHUTDOWN_TIMEOUT_SECONDS=30
+DOCUMENT_API_HOST=0.0.0.0
+DOCUMENT_API_PORT=8000
 ```
 
 Run it with:
@@ -399,6 +404,40 @@ new triggers, aborts pending external-input waits, lets active polls finish for
 up to `DOCUMENT_SHUTDOWN_TIMEOUT_SECONDS`, and publishes `runner.stopping` /
 `runner.stopped` status events when a status topic is configured. The Compose
 file gives the container a 45 second stop grace period by default.
+
+## Read-Only API
+
+The REST API is intentionally read-only for now. It does not edit config,
+trigger polls, or accept OTP/input submissions. It exposes configured accounts,
+registered plugin names, runtime status, pending input requests, recent runtime
+events, and files visible through configured folder outputs. Credential-like
+settings are redacted.
+
+Run API only:
+
+```sh
+.venv/bin/python api_server.py
+```
+
+Run API and MQTT watcher together:
+
+```sh
+DOCUMENT_RUN_MODE=watcher docker compose up document-watcher
+```
+
+Open:
+
+- dashboard: `http://localhost:8000/`
+- Swagger/OpenAPI UI: `http://localhost:8000/docs`
+
+Useful endpoints:
+
+- `GET /api/health`
+- `GET /api/plugins`
+- `GET /api/accounts`
+- `GET /api/accounts/{account_name}`
+- `GET /api/status`
+- `GET /api/documents?limit=50`
 
 ## Run Regularly
 
