@@ -252,29 +252,48 @@ def dashboard_html() -> str:
     <section class="panel" style="margin-top:18px"><h2>Recent Events</h2><div id="events" class="list"></div></section>
   </main>
   <script>
+    const $ = id => document.getElementById(id);
     const cls = s => "status " + (s || "").replace(/[^a-z0-9_-]/gi, "");
     const text = v => v === null || v === undefined || v === "" ? "n/a" : v;
-    const html = v => String(text(v)).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+    const escapeMap = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+    const html = v => String(text(v)).replace(/[&<>"']/g, c => escapeMap[c]);
     const size = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(1)} KB` : `${(n/1048576).toFixed(1)} MB`;
+    async function fetchJson(url) {
+      const response = await fetch(url);
+      if (!response.ok) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+          const body = await response.json();
+          detail = body.detail || detail;
+        } catch (_) {}
+        throw new Error(`${url}: ${detail}`);
+      }
+      return response.json();
+    }
     async function loadData() {
-      const [accounts, status, documents] = await Promise.all([
-        fetch("/api/accounts").then(r => r.json()),
-        fetch("/api/status").then(r => r.json()),
-        fetch("/api/documents?limit=20").then(r => r.json()),
-      ]);
-      accountCount.textContent = accounts.length;
-      activeCount.textContent = status.active_polls.length;
-      inputCount.textContent = status.pending_inputs.length;
-      documentCount.textContent = documents.length;
-      updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
-      document.getElementById("accounts").innerHTML = accounts.map(a => `<tr><td><code>${html(a.name)}</code></td><td>${html(a.source)}</td><td>${a.outputs.map(o => `${html(o.name)}:${html(o.type)}`).join("<br>")}</td><td>${html(a.state.last_run)}</td><td>${html(a.state.seen_count)}</td></tr>`).join("");
-      const runtimeItems = [
-        ...status.active_polls.map(p => `<div><span class="${cls("running")}">running</span> <code>${html(p.account)}</code><div class="muted">since ${html(p.started_at)}</div></div>`),
-        ...status.pending_inputs.map(i => `<div><span class="${cls("waiting")}">waiting</span> <code>${html(i.account)}</code><div class="muted">${html(i.kind)}: ${i.fields.map(html).join(", ")}</div></div>`),
-      ];
-      document.getElementById("runtime").innerHTML = runtimeItems.length ? runtimeItems.join("") : '<div class="muted">No active polls or pending inputs.</div>';
-      document.getElementById("documents").innerHTML = documents.map(d => `<tr><td><code>${html(d.account)}</code></td><td>${html(d.filename)}</td><td>${html(size(d.size_bytes))}</td></tr>`).join("");
-      document.getElementById("events").innerHTML = status.recent_events.slice().reverse().slice(0, 20).map(e => `<div class="event"><span class="${cls(e.status)}">${html(e.status)}</span> <strong>${html(e.event)}</strong> ${e.account ? `<code>${html(e.account)}</code>` : ""}<div class="muted">${html(e.timestamp)} ${html(e.message || "")}</div></div>`).join("");
+      try {
+        const [accounts, status, documents] = await Promise.all([
+          fetchJson("/api/accounts"),
+          fetchJson("/api/status"),
+          fetchJson("/api/documents?limit=20"),
+        ]);
+        $("accountCount").textContent = accounts.length;
+        $("activeCount").textContent = status.active_polls.length;
+        $("inputCount").textContent = status.pending_inputs.length;
+        $("documentCount").textContent = documents.length;
+        $("updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        $("accounts").innerHTML = accounts.length ? accounts.map(a => `<tr><td><code>${html(a.name)}</code></td><td>${html(a.source)}</td><td>${a.outputs.map(o => `${html(o.name)}:${html(o.type)}`).join("<br>")}</td><td>${html(a.state.last_run)}</td><td>${html(a.state.seen_count)}</td></tr>`).join("") : '<tr><td colspan="5" class="muted">No configured accounts returned by the API.</td></tr>';
+        const runtimeItems = [
+          ...status.active_polls.map(p => `<div><span class="${cls("running")}">running</span> <code>${html(p.account)}</code><div class="muted">since ${html(p.started_at)}</div></div>`),
+          ...status.pending_inputs.map(i => `<div><span class="${cls("waiting")}">waiting</span> <code>${html(i.account)}</code><div class="muted">${html(i.kind)}: ${i.fields.map(html).join(", ")}</div></div>`),
+        ];
+        $("runtime").innerHTML = runtimeItems.length ? runtimeItems.join("") : '<div class="muted">No active polls or pending inputs.</div>';
+        $("documents").innerHTML = documents.length ? documents.map(d => `<tr><td><code>${html(d.account)}</code></td><td>${html(d.filename)}</td><td>${html(size(d.size_bytes))}</td></tr>`).join("") : '<tr><td colspan="3" class="muted">No folder-output documents found.</td></tr>';
+        $("events").innerHTML = status.recent_events.length ? status.recent_events.slice().reverse().slice(0, 20).map(e => `<div class="event"><span class="${cls(e.status)}">${html(e.status)}</span> <strong>${html(e.event)}</strong> ${e.account ? `<code>${html(e.account)}</code>` : ""}<div class="muted">${html(e.timestamp)} ${html(e.message || "")}</div></div>`).join("") : '<div class="muted">No runtime events yet.</div>';
+      } catch (error) {
+        $("updated").textContent = `API error: ${error.message}`;
+        $("runtime").innerHTML = `<div class="error">${html(error.message)}</div>`;
+      }
     }
     loadData();
     setInterval(loadData, 10000);
@@ -296,6 +315,13 @@ def create_app(
         description="Read-only account, plugin, runtime, and downloaded-document views.",
         openapi_tags=OPENAPI_TAGS,
     )
+
+    @app.middleware("http")
+    async def no_store_observability_responses(request: Any, call_next: Any) -> Any:
+        response = await call_next(request)
+        if request.url.path == "/" or request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     def accounts() -> list[SourceAccountConfig]:
         try:

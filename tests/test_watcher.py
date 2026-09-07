@@ -1001,6 +1001,15 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(result["refresh_token"], "***")
         self.assertEqual(result["space_id"], "123")
 
+    def test_dashboard_uses_explicit_dom_lookups(self) -> None:
+        html = api_server.dashboard_html()
+
+        self.assertIn("const $ = id => document.getElementById(id);", html)
+        self.assertIn("API error:", html)
+        self.assertIn("'\"': \"&quot;\"", html)
+        self.assertNotIn('""":', html)
+        self.assertNotIn("accountCount.textContent", html)
+
     def test_api_exposes_configured_accounts_and_runtime_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
