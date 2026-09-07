@@ -430,6 +430,9 @@ Open:
 - dashboard: `http://localhost:8000/`
 - Swagger/OpenAPI UI: `http://localhost:8000/docs`
 
+The dashboard is served as static frontend files from `dashboard/`; the Python
+API module only mounts and serves them.
+
 Useful endpoints:
 
 - `GET /api/health`

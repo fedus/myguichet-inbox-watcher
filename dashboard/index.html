@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Document Watcher</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>Document Watcher</h1>
+    <p>Read-only runtime dashboard</p>
+  </header>
+  <main>
+    <div class="toolbar">
+      <div class="muted" id="updated">Loading...</div>
+      <div>
+        <a href="/docs">Swagger</a>
+        <button type="button" id="refresh">Refresh</button>
+      </div>
+    </div>
+    <section class="grid">
+      <div class="panel">
+        <div class="metric" id="accountCount">0</div>
+        <div class="label">Accounts</div>
+      </div>
+      <div class="panel">
+        <div class="metric" id="activeCount">0</div>
+        <div class="label">Active Polls</div>
+      </div>
+      <div class="panel">
+        <div class="metric" id="inputCount">0</div>
+        <div class="label">Pending Inputs</div>
+      </div>
+      <div class="panel">
+        <div class="metric" id="documentCount">0</div>
+        <div class="label">Recent Documents</div>
+      </div>
+    </section>
+    <section class="columns">
+      <div class="panel">
+        <h2>Accounts</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th>Source</th>
+              <th>Outputs</th>
+              <th>Last Run</th>
+              <th>Seen</th>
+            </tr>
+          </thead>
+          <tbody id="accounts"></tbody>
+        </table>
+      </div>
+      <div class="panel">
+        <h2>Runtime</h2>
+        <div id="runtime" class="list"></div>
+      </div>
+    </section>
+    <section class="panel section">
+      <h2>Recent Documents</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th>File</th>
+            <th>Size</th>
+          </tr>
+        </thead>
+        <tbody id="documents"></tbody>
+      </table>
+    </section>
+    <section class="panel section">
+      <h2>Recent Events</h2>
+      <div id="events" class="list"></div>
+    </section>
+  </main>
+</body>
+</html>

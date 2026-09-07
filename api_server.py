@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +17,8 @@ from watcher_core import load_state
 
 try:
     from fastapi import FastAPI, HTTPException, Query
-    from fastapi.responses import HTMLResponse
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
 except ImportError as error:  # pragma: no cover - exercised by real startup
     raise RuntimeError(
         "FastAPI is not installed. Run pip install -r requirements.txt."
@@ -37,6 +37,8 @@ SENSITIVE_SETTING_PARTS = (
 )
 DEFAULT_API_HOST = "0.0.0.0"
 DEFAULT_API_PORT = 8000
+DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
+DASHBOARD_INDEX = DASHBOARD_DIR / "index.html"
 OPENAPI_TAGS = [
     {
         "name": "runtime",
@@ -192,116 +194,6 @@ def list_downloaded_documents(
     return documents[:limit]
 
 
-def dashboard_html() -> str:
-    return """<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Document Watcher</title>
-  <style>
-    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #172033; }
-    body { margin: 0; }
-    header { background: #1d4f8f; color: #fff; padding: 20px 28px; }
-    h1 { font-size: 22px; margin: 0 0 4px; font-weight: 700; letter-spacing: 0; }
-    header p { margin: 0; opacity: .85; }
-    main { max-width: 1180px; margin: 0 auto; padding: 24px; }
-    .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
-    .toolbar a, button { border: 1px solid #c9d3e1; background: #fff; color: #172033; border-radius: 6px; padding: 8px 10px; text-decoration: none; cursor: pointer; }
-    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
-    .panel { background: #fff; border: 1px solid #dde3eb; border-radius: 8px; padding: 16px; }
-    .metric { font-size: 26px; font-weight: 700; }
-    .label { color: #5c6a7d; font-size: 13px; }
-    .columns { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }
-    table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #edf0f4; vertical-align: top; }
-    th { color: #5c6a7d; font-weight: 600; }
-    code { background: #eef2f7; border-radius: 4px; padding: 2px 5px; }
-    .status { display: inline-block; border-radius: 999px; padding: 3px 8px; font-size: 12px; font-weight: 600; background: #edf0f4; }
-    .ok { background: #dff5e8; color: #146b39; }
-    .error { background: #fde2e2; color: #9b1c1c; }
-    .running, .waiting, .queued { background: #e3efff; color: #1d4f8f; }
-    .list { display: grid; gap: 10px; }
-    .event { border-bottom: 1px solid #edf0f4; padding-bottom: 10px; }
-    .event:last-child { border-bottom: 0; padding-bottom: 0; }
-    .muted { color: #5c6a7d; }
-    @media (max-width: 900px) { .grid, .columns { grid-template-columns: 1fr; } main { padding: 16px; } }
-  </style>
-</head>
-<body>
-  <header>
-    <h1>Document Watcher</h1>
-    <p>Read-only runtime dashboard</p>
-  </header>
-  <main>
-    <div class="toolbar">
-      <div class="muted" id="updated">Loading...</div>
-      <div><a href="/docs">Swagger</a> <button onclick="loadData()">Refresh</button></div>
-    </div>
-    <section class="grid">
-      <div class="panel"><div class="metric" id="accountCount">0</div><div class="label">Accounts</div></div>
-      <div class="panel"><div class="metric" id="activeCount">0</div><div class="label">Active Polls</div></div>
-      <div class="panel"><div class="metric" id="inputCount">0</div><div class="label">Pending Inputs</div></div>
-      <div class="panel"><div class="metric" id="documentCount">0</div><div class="label">Recent Documents</div></div>
-    </section>
-    <section class="columns">
-      <div class="panel"><h2>Accounts</h2><table><thead><tr><th>Account</th><th>Source</th><th>Outputs</th><th>Last Run</th><th>Seen</th></tr></thead><tbody id="accounts"></tbody></table></div>
-      <div class="panel"><h2>Runtime</h2><div id="runtime" class="list"></div></div>
-    </section>
-    <section class="panel" style="margin-top:18px"><h2>Recent Documents</h2><table><thead><tr><th>Account</th><th>File</th><th>Size</th></tr></thead><tbody id="documents"></tbody></table></section>
-    <section class="panel" style="margin-top:18px"><h2>Recent Events</h2><div id="events" class="list"></div></section>
-  </main>
-  <script>
-    const $ = id => document.getElementById(id);
-    const cls = s => "status " + (s || "").replace(/[^a-z0-9_-]/gi, "");
-    const text = v => v === null || v === undefined || v === "" ? "n/a" : v;
-    const escapeMap = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-    const html = v => String(text(v)).replace(/[&<>"']/g, c => escapeMap[c]);
-    const size = n => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(1)} KB` : `${(n/1048576).toFixed(1)} MB`;
-    async function fetchJson(url) {
-      const response = await fetch(url);
-      if (!response.ok) {
-        let detail = `${response.status} ${response.statusText}`;
-        try {
-          const body = await response.json();
-          detail = body.detail || detail;
-        } catch (_) {}
-        throw new Error(`${url}: ${detail}`);
-      }
-      return response.json();
-    }
-    async function loadData() {
-      try {
-        const [accounts, status, documents] = await Promise.all([
-          fetchJson("/api/accounts"),
-          fetchJson("/api/status"),
-          fetchJson("/api/documents?limit=20"),
-        ]);
-        $("accountCount").textContent = accounts.length;
-        $("activeCount").textContent = status.active_polls.length;
-        $("inputCount").textContent = status.pending_inputs.length;
-        $("documentCount").textContent = documents.length;
-        $("updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
-        $("accounts").innerHTML = accounts.length ? accounts.map(a => `<tr><td><code>${html(a.name)}</code></td><td>${html(a.source)}</td><td>${a.outputs.map(o => `${html(o.name)}:${html(o.type)}`).join("<br>")}</td><td>${html(a.state.last_run)}</td><td>${html(a.state.seen_count)}</td></tr>`).join("") : '<tr><td colspan="5" class="muted">No configured accounts returned by the API.</td></tr>';
-        const runtimeItems = [
-          ...status.active_polls.map(p => `<div><span class="${cls("running")}">running</span> <code>${html(p.account)}</code><div class="muted">since ${html(p.started_at)}</div></div>`),
-          ...status.pending_inputs.map(i => `<div><span class="${cls("waiting")}">waiting</span> <code>${html(i.account)}</code><div class="muted">${html(i.kind)}: ${i.fields.map(html).join(", ")}</div></div>`),
-        ];
-        $("runtime").innerHTML = runtimeItems.length ? runtimeItems.join("") : '<div class="muted">No active polls or pending inputs.</div>';
-        $("documents").innerHTML = documents.length ? documents.map(d => `<tr><td><code>${html(d.account)}</code></td><td>${html(d.filename)}</td><td>${html(size(d.size_bytes))}</td></tr>`).join("") : '<tr><td colspan="3" class="muted">No folder-output documents found.</td></tr>';
-        $("events").innerHTML = status.recent_events.length ? status.recent_events.slice().reverse().slice(0, 20).map(e => `<div class="event"><span class="${cls(e.status)}">${html(e.status)}</span> <strong>${html(e.event)}</strong> ${e.account ? `<code>${html(e.account)}</code>` : ""}<div class="muted">${html(e.timestamp)} ${html(e.message || "")}</div></div>`).join("") : '<div class="muted">No runtime events yet.</div>';
-      } catch (error) {
-        $("updated").textContent = `API error: ${error.message}`;
-        $("runtime").innerHTML = `<div class="error">${html(error.message)}</div>`;
-      }
-    }
-    loadData();
-    setInterval(loadData, 10000);
-  </script>
-</body>
-</html>"""
-
-
 def create_app(
     config_provider: ConfigProvider | None = None,
     runtime_state: RuntimeState | None = None,
@@ -319,9 +211,15 @@ def create_app(
     @app.middleware("http")
     async def no_store_observability_responses(request: Any, call_next: Any) -> Any:
         response = await call_next(request)
-        if request.url.path == "/" or request.url.path.startswith("/api/"):
+        if (
+            request.url.path == "/"
+            or request.url.path.startswith("/api/")
+            or request.url.path.startswith("/assets/")
+        ):
             response.headers["Cache-Control"] = "no-store"
         return response
+
+    app.mount("/assets", StaticFiles(directory=DASHBOARD_DIR), name="assets")
 
     def accounts() -> list[SourceAccountConfig]:
         try:
@@ -329,9 +227,9 @@ def create_app(
         except Exception as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
 
-    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    def dashboard() -> str:
-        return dashboard_html()
+    @app.get("/", response_class=FileResponse, include_in_schema=False)
+    def dashboard() -> FileResponse:
+        return FileResponse(DASHBOARD_INDEX)
 
     @app.get("/api/health", tags=["runtime"])
     def health() -> dict[str, str]:

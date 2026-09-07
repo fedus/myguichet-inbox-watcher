@@ -1,0 +1,174 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f6f7f9;
+  color: #172033;
+}
+
+body {
+  margin: 0;
+}
+
+header {
+  background: #1d4f8f;
+  color: #fff;
+  padding: 20px 28px;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0 0 4px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  letter-spacing: 0;
+}
+
+header p {
+  margin: 0;
+  opacity: .85;
+}
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.toolbar a,
+button {
+  border: 1px solid #c9d3e1;
+  background: #fff;
+  color: #172033;
+  border-radius: 6px;
+  padding: 8px 10px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid #dde3eb;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.metric {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.label {
+  color: #5c6a7d;
+  font-size: 13px;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1.2fr .8fr;
+  gap: 18px;
+}
+
+.section {
+  margin-top: 18px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 10px 8px;
+  border-bottom: 1px solid #edf0f4;
+  vertical-align: top;
+}
+
+th {
+  color: #5c6a7d;
+  font-weight: 600;
+}
+
+code {
+  background: #eef2f7;
+  border-radius: 4px;
+  padding: 2px 5px;
+}
+
+.status {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #edf0f4;
+}
+
+.ok {
+  background: #dff5e8;
+  color: #146b39;
+}
+
+.error {
+  background: #fde2e2;
+  color: #9b1c1c;
+}
+
+.running,
+.waiting,
+.queued {
+  background: #e3efff;
+  color: #1d4f8f;
+}
+
+.list {
+  display: grid;
+  gap: 10px;
+}
+
+.event {
+  border-bottom: 1px solid #edf0f4;
+  padding-bottom: 10px;
+}
+
+.event:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.muted {
+  color: #5c6a7d;
+}
+
+@media (max-width: 900px) {
+  .grid,
+  .columns {
+    grid-template-columns: 1fr;
+  }
+
+  main {
+    padding: 16px;
+  }
+}

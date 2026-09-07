@@ -1001,14 +1001,23 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(result["refresh_token"], "***")
         self.assertEqual(result["space_id"], "123")
 
-    def test_dashboard_uses_explicit_dom_lookups(self) -> None:
-        html = api_server.dashboard_html()
+    def test_dashboard_assets_are_served_separately(self) -> None:
+        index = (api_server.DASHBOARD_DIR / "index.html").read_text(
+            encoding="utf-8"
+        )
+        javascript = (api_server.DASHBOARD_DIR / "app.js").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn("const $ = id => document.getElementById(id);", html)
-        self.assertIn("API error:", html)
-        self.assertIn("'\"': \"&quot;\"", html)
-        self.assertNotIn('""":', html)
-        self.assertNotIn("accountCount.textContent", html)
+        self.assertIn('href="/assets/styles.css"', index)
+        self.assertIn('src="/assets/app.js"', index)
+        self.assertNotIn("<style>", index)
+        self.assertNotIn("<script>", index)
+        self.assertIn("const $ = (id) => document.getElementById(id);", javascript)
+        self.assertIn("API error:", javascript)
+        self.assertIn("'\"': \"&quot;\"", javascript)
+        self.assertNotIn('""":', javascript)
+        self.assertNotIn("accountCount.textContent", javascript)
 
     def test_api_exposes_configured_accounts_and_runtime_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1036,11 +1045,14 @@ class WatcherHelpersTest(unittest.TestCase):
             account_payload = api_server.account_payload(account)
             status = state.snapshot()
             openapi_paths = app.openapi()["paths"]
+            route_paths = {getattr(route, "path", "") for route in app.routes}
 
         self.assertIn("/api/health", openapi_paths)
         self.assertIn("/api/plugins", openapi_paths)
         self.assertIn("/api/accounts", openapi_paths)
         self.assertIn("/api/status", openapi_paths)
+        self.assertIn("/", route_paths)
+        self.assertIn("/assets", route_paths)
         self.assertEqual(account_payload["name"], "alice_dkv")
         self.assertEqual(account_payload["source_settings"]["username"], "***")
         self.assertEqual(account_payload["source_settings"]["otp_type"], "SMS")
