@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import json
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from collections.abc import Mapping
 from typing import Any
 
 from config import ConfigProvider, EnvConfigProvider
@@ -17,8 +19,8 @@ from sources.base import SourceAccountConfig
 from watcher_core import load_state
 
 try:
-    from fastapi import FastAPI, HTTPException, Query
-    from fastapi.responses import FileResponse
+    from fastapi import FastAPI, HTTPException, Query, Request
+    from fastapi.responses import FileResponse, StreamingResponse
     from fastapi.staticfiles import StaticFiles
 except ImportError as error:  # pragma: no cover - exercised by real startup
     raise RuntimeError(
@@ -297,6 +299,34 @@ def create_app(
     @app.get("/api/status", tags=["runtime"])
     def status() -> dict[str, Any]:
         return state.snapshot()
+
+    @app.get("/api/events", tags=["runtime"])
+    def events(limit: int = Query(default=200, ge=1, le=500)) -> list[dict[str, Any]]:
+        return state.recent_events(limit)
+
+    @app.get("/api/events/stream", tags=["runtime"])
+    async def event_stream(
+        request: Request,
+        after: int = Query(default=0, ge=0),
+    ) -> StreamingResponse:
+        async def stream() -> Any:
+            last_id = after or state.latest_event_id()
+            yield ": connected\n\n"
+            while not await request.is_disconnected():
+                events = await asyncio.to_thread(
+                    state.wait_for_events,
+                    last_id,
+                    timeout_seconds=15.0,
+                )
+                if not events:
+                    yield ": keep-alive\n\n"
+                    continue
+                for event in events:
+                    last_id = int(event["id"])
+                    data = json.dumps(event, separators=(",", ":"))
+                    yield f"id: {last_id}\nevent: runtime\ndata: {data}\n\n"
+
+        return StreamingResponse(stream(), media_type="text/event-stream")
 
     @app.get("/api/service", tags=["service"])
     def service() -> dict[str, Any]:

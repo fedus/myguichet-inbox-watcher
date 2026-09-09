@@ -21,7 +21,9 @@ import watcher_core  # noqa: E402
 import mqtt_trigger  # noqa: E402
 import config  # noqa: E402
 import api_server  # noqa: E402
+import document_watcher  # noqa: E402
 from input_broker import (  # noqa: E402
+    CliInputBroker,
     InputChallenge,
     InputTimeoutError,
     InputUnavailableError,
@@ -1015,12 +1017,16 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertNotIn("<script>", index)
         self.assertIn('id="serviceBadges"', index)
         self.assertIn('class="service-tab is-selected"', index)
+        self.assertIn('id="logLiveState"', index)
+        self.assertIn('data-log-filter="error"', index)
         self.assertIn("<th>Details</th>", index)
         self.assertNotIn('id="outputConfig"', index)
         self.assertIn("const $ = (id) => document.getElementById(id);", javascript)
         self.assertIn("API error:", javascript)
         self.assertIn("function renderOutputPills(outputs)", javascript)
         self.assertIn("function renderAccountDetailRow(account)", javascript)
+        self.assertIn("function connectEventStream()", javascript)
+        self.assertIn("new EventSource", javascript)
         self.assertIn("fetchJson(\"/api/service\")", javascript)
         self.assertIn('class="config-list"', javascript)
         self.assertIn('colspan="6"', javascript)
@@ -1054,6 +1060,19 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertNotIn("username", payload["mqtt"])
         self.assertNotIn("password", payload["mqtt"])
 
+    def test_runtime_state_assigns_event_ids_and_recent_events(self) -> None:
+        state = RuntimeState(max_events=2)
+        state.record_event("first", "ok")
+        state.record_event("second", "error", message="failed")
+        state.record_event("third", "ok")
+
+        events = state.recent_events()
+
+        self.assertEqual([event["event"] for event in events], ["second", "third"])
+        self.assertEqual([event["id"] for event in events], [2, 3])
+        self.assertEqual(state.latest_event_id(), 3)
+        self.assertEqual(state.wait_for_events(2, timeout_seconds=0.01)[0]["event"], "third")
+
     def test_api_exposes_configured_accounts_and_runtime_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1086,6 +1105,8 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("/api/plugins", openapi_paths)
         self.assertIn("/api/accounts", openapi_paths)
         self.assertIn("/api/status", openapi_paths)
+        self.assertIn("/api/events", openapi_paths)
+        self.assertIn("/api/events/stream", openapi_paths)
         self.assertIn("/api/service", openapi_paths)
         self.assertIn("/", route_paths)
         self.assertIn("/assets", route_paths)
@@ -1322,16 +1343,60 @@ class WatcherHelpersTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
             account = fake_source_account(root)
+            runtime = RuntimeState()
+            context = SourceContext(CliInputBroker(), runtime)
 
             with patch("builtins.print"):
                 with self.assertRaises(SourceError):
-                    watcher_core.run_poll(account, PartlyFailingSource())
+                    watcher_core.run_poll(account, PartlyFailingSource(), context)
 
             state = watcher_core.load_state(account)
             self.assertEqual(state["seen_ids"], ["2"])
             downloaded = list((root / "downloads").iterdir())
             self.assertEqual(len(downloaded), 1)
             self.assertEqual(downloaded[0].read_bytes(), b"downloaded")
+            events = runtime.recent_events()
+            self.assertEqual(events[0]["event"], "message.failed")
+            self.assertEqual(events[0]["status"], "error")
+            self.assertEqual(events[0]["account"], account.name)
+            self.assertEqual(events[0]["source"], account.source)
+            self.assertEqual(events[0]["details"]["message_id"], "1")
+            self.assertEqual(
+                events[0]["details"]["error_type"],
+                "SourceResponseError",
+            )
+
+    def test_cli_records_account_level_poll_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            account = fake_source_account(Path(temporary_directory))
+            provider = FakeConfigProvider([account])
+            runtime = RuntimeState()
+
+            with (
+                patch.object(document_watcher, "runtime_state", runtime),
+                patch.object(
+                    document_watcher,
+                    "install_shutdown_handlers",
+                    return_value=(None, None),
+                ),
+                patch.object(
+                    document_watcher,
+                    "poll_account",
+                    side_effect=SourceError("source unavailable"),
+                ),
+                patch("builtins.print"),
+            ):
+                exit_code = document_watcher.main(
+                    ["--account", account.name],
+                    provider,
+                )
+
+            self.assertEqual(exit_code, 1)
+            events = runtime.recent_events()
+            self.assertEqual([event["event"] for event in events], ["poll.started", "poll.finished"])
+            self.assertEqual(events[1]["status"], "error")
+            self.assertEqual(events[1]["message"], "source unavailable")
+            self.assertEqual(events[1]["details"]["error_type"], "SourceError")
 
     def test_output_failure_prevents_message_checkpoint(self) -> None:
         register_output("always_failing", AlwaysFailingOutput)
@@ -1646,7 +1711,11 @@ class WatcherHelpersTest(unittest.TestCase):
                     jobs.put(None)
                     jobs.join()
 
-            mocked.assert_called_once_with(account, input_broker=broker)
+            mocked.assert_called_once_with(
+                account,
+                input_broker=broker,
+                runtime_state=state,
+            )
 
 
 if __name__ == "__main__":

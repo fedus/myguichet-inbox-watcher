@@ -115,7 +115,18 @@
       </div>
     </section>
     <section class="panel section">
-      <h2>Recent Events</h2>
+      <div class="panel-heading">
+        <h2>Log</h2>
+        <div class="log-controls">
+          <span id="logLiveState" class="live-pill">polling</span>
+          <button type="button" class="log-filter is-selected" data-log-filter="all">
+            All
+          </button>
+          <button type="button" class="log-filter" data-log-filter="error">
+            Errors
+          </button>
+        </div>
+      </div>
       <div id="events" class="list"></div>
     </section>
   </main>

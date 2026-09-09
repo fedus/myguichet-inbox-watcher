@@ -497,6 +497,18 @@ def run_poll(
                     f"[{account.name}] Message {message.id} failed: {error}",
                     file=sys.stderr,
                 )
+                if context.runtime_state is not None:
+                    context.runtime_state.record_event(
+                        "message.failed",
+                        "error",
+                        account=account.name,
+                        source=account.source,
+                        message=str(error),
+                        details={
+                            "message_id": message.id,
+                            "error_type": type(error).__name__,
+                        },
+                    )
                 failed_messages += 1
                 continue
 
@@ -531,10 +543,12 @@ def run_poll(
 
 
 def poll_account(
-    account: SourceAccountConfig, input_broker: InputBroker | None = None
+    account: SourceAccountConfig,
+    input_broker: InputBroker | None = None,
+    runtime_state: Any | None = None,
 ) -> int:
     """Poll one account with locking and one expired-session refresh."""
-    context = SourceContext(input_broker or CliInputBroker())
+    context = SourceContext(input_broker or CliInputBroker(), runtime_state)
     with exclusive_lock(account.lock_file):
         source = create_source(account.source)
         try:

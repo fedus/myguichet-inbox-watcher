@@ -13,6 +13,7 @@ from config import (
     EnvConfigProvider,
 )
 from outputs.base import OutputError
+from runtime_state import runtime_state
 from sources.base import SourceError
 from storage import AlreadyRunning
 from watcher_core import StateError, poll_account
@@ -75,9 +76,24 @@ def main(
                 print(f"[{account.name}] Skipped because shutdown was requested.")
                 break
             try:
-                total_messages += poll_account(account)
+                runtime_state.poll_started(account.name, account.source)
+                count = poll_account(account, runtime_state=runtime_state)
+                total_messages += count
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "ok",
+                    new_messages=count,
+                )
             except AlreadyRunning as error:
                 print(f"[{account.name}] {error}")
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "skipped",
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
             except (
                 ConfigurationError,
                 OutputError,
@@ -87,9 +103,22 @@ def main(
                 StateError,
             ) as error:
                 print(f"[{account.name}] Watcher failed: {error}", file=sys.stderr)
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "error",
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
                 failed = True
     except ConfigurationError as error:
         print(f"Watcher failed: {error}", file=sys.stderr)
+        runtime_state.record_event(
+            "watcher.failed",
+            "error",
+            message=str(error),
+            details={"error_type": type(error).__name__},
+        )
         return 1
     except KeyboardInterrupt:
         print("Watcher interrupted.", file=sys.stderr)

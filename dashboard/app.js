@@ -25,9 +25,12 @@ const size = (bytes) => {
   return `${(bytes / 1048576).toFixed(1)} MB`;
 };
 let latestAccounts = [];
+let latestEvents = [];
 let latestService = null;
 let selectedService = "http";
+let selectedLogFilter = "all";
 let expandedAccount = null;
+let eventStream = null;
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -153,6 +156,73 @@ function renderServiceDetails() {
   `;
 }
 
+function eventIsError(event) {
+  return ["aborted", "error", "timeout"].includes(event.status);
+}
+
+function mergeEvents(events) {
+  const byId = new Map();
+  [...latestEvents, ...events].forEach((event) => byId.set(event.id, event));
+  latestEvents = [...byId.values()]
+    .sort((left, right) => Number(left.id) - Number(right.id))
+    .slice(-200);
+}
+
+function renderLog() {
+  const events =
+    selectedLogFilter === "error"
+      ? latestEvents.filter(eventIsError)
+      : latestEvents;
+  $("events").innerHTML = events.length
+    ? events
+        .slice()
+        .reverse()
+        .map(
+          (event) =>
+            `<div class="log-line ${eventIsError(event) ? "is-error" : ""}">
+              <span class="log-time">${html(event.timestamp)}</span>
+              <span class="${cls(event.status)}">${html(event.status)}</span>
+              <strong>${html(event.event)}</strong>
+              ${event.account ? `<code>${html(event.account)}</code>` : ""}
+              ${
+                event.source
+                  ? `<span class="log-source">${html(event.source)}</span>`
+                  : ""
+              }
+              ${
+                event.message
+                  ? `<span class="log-message">${html(event.message)}</span>`
+                  : ""
+              }
+            </div>`
+        )
+        .join("")
+    : '<div class="muted">No log entries yet.</div>';
+}
+
+function connectEventStream() {
+  if (eventStream || !window.EventSource) {
+    if (!window.EventSource) {
+      $("logLiveState").textContent = "polling";
+    }
+    return;
+  }
+  const lastId = latestEvents.length ? latestEvents[latestEvents.length - 1].id : 0;
+  eventStream = new EventSource(`/api/events/stream?after=${lastId}`);
+  eventStream.onopen = () => {
+    $("logLiveState").textContent = "live";
+    $("logLiveState").classList.add("is-live");
+  };
+  eventStream.onerror = () => {
+    $("logLiveState").textContent = "reconnecting";
+    $("logLiveState").classList.remove("is-live");
+  };
+  eventStream.addEventListener("runtime", (message) => {
+    mergeEvents([JSON.parse(message.data)]);
+    renderLog();
+  });
+}
+
 function renderRuntime(status) {
   const runtimeItems = [
     ...status.active_polls.map(
@@ -192,26 +262,6 @@ function renderDocuments(documents) {
     : '<tr><td colspan="3" class="muted">No folder-output documents found.</td></tr>';
 }
 
-function renderEvents(events) {
-  $("events").innerHTML = events.length
-    ? events
-        .slice()
-        .reverse()
-        .slice(0, 20)
-        .map(
-          (event) =>
-            `<div class="event"><span class="${cls(event.status)}">${html(
-              event.status
-            )}</span> <strong>${html(event.event)}</strong> ${
-              event.account ? `<code>${html(event.account)}</code>` : ""
-            }<div class="muted">${html(event.timestamp)} ${html(
-              event.message || ""
-            )}</div></div>`
-        )
-        .join("")
-    : '<div class="muted">No runtime events yet.</div>';
-}
-
 function renderPlugins(plugins) {
   const sourceItems = plugins.sources.map(
     (source) => `<span class="plugin-pill source">${html(source)}</span>`
@@ -247,13 +297,15 @@ async function loadData() {
     $("inputCount").textContent = status.pending_inputs.length;
     $("documentCount").textContent = documents.length;
     $("updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+    mergeEvents(status.recent_events);
     renderAccounts(accounts);
     renderRuntime(status);
     renderDocuments(documents);
-    renderEvents(status.recent_events);
+    renderLog();
     renderPlugins(plugins);
     renderServiceBadges(service);
     renderServiceDetails();
+    connectEventStream();
     if (expandedAccount && !accounts.some((account) => account.name === expandedAccount)) {
       expandedAccount = null;
       renderAccounts(accounts);
@@ -283,6 +335,14 @@ document.addEventListener("click", (event) => {
       .querySelectorAll(".service-tab")
       .forEach((chip) => chip.classList.toggle("is-selected", chip === target));
     renderServiceDetails();
+    return;
+  }
+  if (target.classList.contains("log-filter")) {
+    selectedLogFilter = target.dataset.logFilter || "all";
+    document
+      .querySelectorAll(".log-filter")
+      .forEach((chip) => chip.classList.toggle("is-selected", chip === target));
+    renderLog();
   }
 });
 loadData();

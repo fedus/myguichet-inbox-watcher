@@ -440,6 +440,8 @@ Useful endpoints:
 - `GET /api/accounts`
 - `GET /api/accounts/{account_name}`
 - `GET /api/status`
+- `GET /api/events`
+- `GET /api/events/stream`
 - `GET /api/service`
 - `GET /api/documents?limit=50`
 

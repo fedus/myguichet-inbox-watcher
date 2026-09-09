@@ -350,7 +350,11 @@ def worker(
                 ),
             )
             try:
-                count = poll_account(account, input_broker=input_broker)
+                count = poll_account(
+                    account,
+                    input_broker=input_broker,
+                    runtime_state=runtime_state,
+                )
             except AlreadyRunning as error:
                 print(f"[{account.name}] {error}")
                 runtime_state.poll_finished(

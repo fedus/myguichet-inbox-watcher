@@ -212,7 +212,8 @@ main {
   pointer-events: none;
 }
 
-.panel > h2 {
+.panel > h2,
+.panel-heading {
   padding: 10px 38px 10px 12px;
   border-bottom: 2px solid var(--line);
   background:
@@ -227,7 +228,14 @@ main {
     #c9f6ff;
 }
 
-.panel > :not(h2) {
+.panel-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.panel > :not(h2):not(.panel-heading) {
   margin: 14px;
 }
 
@@ -369,7 +377,8 @@ code {
 }
 
 .detail-toggle,
-.service-tab {
+.service-tab,
+.log-filter {
   min-height: 30px;
   border: 2px solid var(--line);
   border-radius: 0;
@@ -384,7 +393,8 @@ code {
 }
 
 .detail-toggle:hover,
-.service-tab:hover {
+.service-tab:hover,
+.log-filter:hover {
   transform: translate(-1px, -1px);
   box-shadow: 3px 3px 0 var(--line);
 }
@@ -392,7 +402,9 @@ code {
 .detail-toggle:active,
 .detail-toggle.is-selected,
 .service-tab:active,
-.service-tab.is-selected {
+.service-tab.is-selected,
+.log-filter:active,
+.log-filter.is-selected {
   transform: translate(1px, 1px);
   background: var(--sun);
   box-shadow: 1px 1px 0 var(--line);
@@ -403,6 +415,32 @@ code {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+.log-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.live-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  border: 1px dashed #7f759e;
+  background: rgba(255, 255, 255, .62);
+  color: var(--muted);
+  padding: 5px 8px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.live-pill.is-live {
+  border-color: var(--green);
+  background: #dffbd6;
+  color: var(--green);
 }
 
 .account-detail-row:hover {
@@ -561,14 +599,36 @@ code {
   background: #ffe2f5;
 }
 
-.event {
+.log-line {
+  display: grid;
+  grid-template-columns: 170px auto auto auto auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
   border-bottom: 1px dashed #b9afd7;
-  padding-bottom: 10px;
+  padding-bottom: 9px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 13px;
 }
 
-.event:last-child {
+.log-line:last-child {
   border-bottom: 0;
   padding-bottom: 0;
+}
+
+.log-line.is-error {
+  color: var(--red);
+}
+
+.log-time,
+.log-source,
+.log-message {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.log-time,
+.log-source {
+  color: var(--muted);
 }
 
 .muted {
@@ -632,11 +692,21 @@ code {
     box-shadow: 4px 4px 0 rgba(20, 19, 41, .16);
   }
 
-  .panel > h2 {
+  .panel > h2,
+  .panel-heading {
     padding: 9px 34px 9px 10px;
   }
 
-  .panel > :not(h2) {
+  .panel-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .log-controls {
+    justify-content: flex-start;
+  }
+
+  .panel > :not(h2):not(.panel-heading) {
     margin: 12px;
   }
 
@@ -710,6 +780,11 @@ code {
   .config-list div {
     grid-template-columns: 1fr;
     gap: 2px;
+  }
+
+  .log-line {
+    grid-template-columns: 1fr;
+    gap: 5px;
   }
 }
 

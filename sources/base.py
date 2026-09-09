@@ -10,6 +10,7 @@ from input_broker import InputBroker, InputChallenge, InputError
 
 if TYPE_CHECKING:
     from outputs.base import OutputConfig
+    from runtime_state import RuntimeState
 
 
 class SourceError(RuntimeError):
@@ -29,6 +30,7 @@ class SourceContext:
     """Runtime services available to source plugins during one poll."""
 
     input_broker: InputBroker
+    runtime_state: RuntimeState | None = None
 
     def request_input(self, challenge: InputChallenge) -> dict[str, str]:
         """Request external input and expose failures as source errors."""
