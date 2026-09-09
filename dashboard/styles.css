@@ -100,7 +100,8 @@ h2 {
   gap: 7px;
 }
 
-.service-chip {
+.service-pill {
+  display: block;
   min-height: auto;
   border: 2px solid #101022;
   background: var(--sun);
@@ -112,35 +113,20 @@ h2 {
   box-shadow: 3px 3px 0 #101022;
 }
 
-.service-chip span,
-.service-chip small {
+.service-pill span,
+.service-pill small {
   display: block;
 }
 
-.service-chip small {
+.service-pill small {
   margin-top: 2px;
   font-size: 10px;
   font-weight: 400;
 }
 
-.service-chip:nth-child(2) {
+.service-pill:nth-child(2) {
   background: var(--pink);
   color: #fff;
-}
-
-.service-chip.is-selected {
-  transform: translate(2px, 2px);
-  box-shadow: 1px 1px 0 #101022;
-}
-
-.service-chip:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 4px 4px 0 #101022;
-}
-
-.service-chip.is-selected:hover {
-  transform: translate(2px, 2px);
-  box-shadow: 1px 1px 0 #101022;
 }
 
 main {
@@ -291,7 +277,7 @@ table {
 
 .accounts-table th:nth-child(1),
 .accounts-table td:nth-child(1) {
-  width: 26%;
+  width: 24%;
 }
 
 .accounts-table th:nth-child(2),
@@ -301,16 +287,21 @@ table {
 
 .accounts-table th:nth-child(3),
 .accounts-table td:nth-child(3) {
-  width: 27%;
+  width: 24%;
 }
 
 .accounts-table th:nth-child(4),
 .accounts-table td:nth-child(4) {
-  width: 25%;
+  width: 22%;
 }
 
 .accounts-table th:nth-child(5),
 .accounts-table td:nth-child(5) {
+  width: 8%;
+}
+
+.accounts-table th:nth-child(6),
+.accounts-table td:nth-child(6) {
   width: 10%;
 }
 
@@ -360,7 +351,7 @@ code {
   font-family: "Courier New", Courier, monospace;
 }
 
-.output-chip {
+.output-pill {
   display: inline-block;
   max-width: 100%;
   min-height: auto;
@@ -374,18 +365,78 @@ code {
   font-size: 13px;
   font-weight: 700;
   overflow-wrap: anywhere;
-  cursor: pointer;
   box-shadow: 2px 2px 0 rgba(20, 19, 41, .16);
 }
 
-.output-chip:hover {
-  transform: translate(-1px, -1px);
-  box-shadow: 3px 3px 0 rgba(20, 19, 41, .22);
+.detail-toggle,
+.service-tab {
+  min-height: 30px;
+  border: 2px solid var(--line);
+  border-radius: 0;
+  background: #fff;
+  color: var(--ink);
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 2px 2px 0 var(--line);
 }
 
-.output-chip:active {
+.detail-toggle:hover,
+.service-tab:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 var(--line);
+}
+
+.detail-toggle:active,
+.detail-toggle.is-selected,
+.service-tab:active,
+.service-tab.is-selected {
   transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 rgba(20, 19, 41, .22);
+  background: var(--sun);
+  box-shadow: 1px 1px 0 var(--line);
+}
+
+.service-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.account-detail-row:hover {
+  background: transparent;
+}
+
+.account-detail-row td {
+  width: auto;
+  padding: 0;
+  border-bottom: 1px solid #d8d1eb;
+}
+
+.account-detail-panel {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 14px;
+  margin: 0;
+  padding: 14px;
+  border-top: 1px dashed #b9afd7;
+  background:
+    linear-gradient(90deg, rgba(255, 225, 92, .38), rgba(255, 255, 255, .74)),
+    #fffdf3;
+}
+
+.output-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.output-card {
+  border: 1px solid #b9afd7;
+  background: rgba(255, 255, 255, .72);
+  padding: 10px;
 }
 
 .selected-title {
@@ -627,6 +678,24 @@ code {
   .accounts-table td,
   .documents-table td {
     width: auto;
+  }
+
+  .account-detail-row td {
+    display: block;
+    padding: 0;
+  }
+
+  .account-detail-row td::before {
+    content: none;
+  }
+
+  .account-detail-panel {
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
+
+  .output-card-grid {
+    grid-template-columns: 1fr;
   }
 
   td::before {

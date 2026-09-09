@@ -19,15 +19,15 @@
         <h1>Document Watcher</h1>
         <p>Runtime dashboard</p>
       </div>
-      <div class="badge-stack" id="serviceBadges">
-        <button type="button" class="service-chip is-selected" data-service="http">
+      <div class="badge-stack" id="serviceBadges" aria-label="Service status">
+        <span class="service-pill">
           <span>HTTP</span>
           <small id="httpBadge">loading</small>
-        </button>
-        <button type="button" class="service-chip" data-service="mqtt">
+        </span>
+        <span class="service-pill">
           <span>MQTT</span>
           <small id="mqttBadge">loading</small>
-        </button>
+        </span>
       </div>
     </div>
   </header>
@@ -69,6 +69,7 @@
                 <th>Outputs</th>
                 <th>Last Run</th>
                 <th>Seen</th>
+                <th>Details</th>
               </tr>
             </thead>
             <tbody id="accounts"></tbody>
@@ -82,13 +83,15 @@
         </div>
         <div class="panel">
           <h2>Service</h2>
-          <div id="serviceDetails" class="service-details"></div>
-        </div>
-        <div class="panel">
-          <h2>Output Config</h2>
-          <div id="outputConfig" class="selected-config muted">
-            Select an output in the Accounts table.
+          <div class="service-tabs">
+            <button type="button" class="service-tab is-selected" data-service="http">
+              HTTP
+            </button>
+            <button type="button" class="service-tab" data-service="mqtt">
+              MQTT
+            </button>
           </div>
+          <div id="serviceDetails" class="service-details"></div>
         </div>
         <div class="panel">
           <h2>Plugins</h2>

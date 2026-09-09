@@ -27,7 +27,7 @@ const size = (bytes) => {
 let latestAccounts = [];
 let latestService = null;
 let selectedService = "http";
-let selectedOutput = null;
+let expandedAccount = null;
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -55,49 +55,78 @@ function renderKeyValues(settings) {
     .join("")}</dl>`;
 }
 
-function renderOutputChip(account, output, index) {
-  return `<button type="button" class="output-chip" data-account="${html(
-    account.name
-  )}" data-output-index="${index}">${html(output.name)}:${html(output.type)}</button>`;
+function renderOutputPills(outputs) {
+  if (!outputs.length) {
+    return '<span class="muted">none</span>';
+  }
+  return outputs
+    .map(
+      (output) =>
+        `<span class="output-pill">${html(output.name)}:${html(
+          output.type
+        )}</span>`
+    )
+    .join("");
 }
 
-function showOutputConfig(accountName, outputIndex) {
-  const account = latestAccounts.find((item) => item.name === accountName);
-  const output = account?.outputs?.[Number(outputIndex)];
-  if (!account || !output) {
-    selectedOutput = null;
-    $("outputConfig").className = "selected-config muted";
-    $("outputConfig").innerHTML = "Select an output in the Accounts table.";
-    return;
+function renderOutputConfigCards(account) {
+  if (!account.outputs.length) {
+    return '<div class="config-empty">No output plugins configured.</div>';
   }
-  selectedOutput = { accountName, outputIndex };
-  $("outputConfig").className = "selected-config";
-  $("outputConfig").innerHTML = `
-    <div class="selected-title"><code>${html(account.name)}</code></div>
-    <div class="selected-subtitle">${html(output.name)}:${html(output.type)}</div>
-    ${renderKeyValues(output.settings)}
-  `;
+  return account.outputs
+    .map(
+      (output) => `
+        <div class="output-card">
+          <div class="selected-subtitle">${html(output.name)}:${html(
+        output.type
+      )}</div>
+          ${renderKeyValues(output.settings)}
+        </div>`
+    )
+    .join("");
+}
+
+function renderAccountDetailRow(account) {
+  if (expandedAccount !== account.name) {
+    return "";
+  }
+  return `<tr class="account-detail-row">
+    <td colspan="6">
+      <div class="account-detail-panel">
+        <div>
+          <div class="plugin-label">Output configuration</div>
+          <div class="selected-title"><code>${html(account.name)}</code></div>
+        </div>
+        <div class="output-card-grid">${renderOutputConfigCards(account)}</div>
+      </div>
+    </td>
+  </tr>`;
 }
 
 function renderAccounts(accounts) {
   $("accounts").innerHTML = accounts.length
     ? accounts
         .map(
-          (account) =>
-            `<tr><td data-label="Account"><code>${html(
+          (account) => `
+            <tr><td data-label="Account"><code>${html(
               account.name
             )}</code></td><td data-label="Source">${html(
               account.source
-            )}</td><td data-label="Outputs">${account.outputs
-              .map((output, index) => renderOutputChip(account, output, index))
-              .join("")}</td><td data-label="Last Run">${html(
+            )}</td><td data-label="Outputs">${renderOutputPills(
+              account.outputs
+            )}</td><td data-label="Last Run">${html(
               account.state.last_run
             )}</td><td data-label="Seen">${html(
               account.state.seen_count
-            )}</td></tr>`
+            )}</td><td data-label="Details"><button type="button" class="detail-toggle${
+              expandedAccount === account.name ? " is-selected" : ""
+            }" data-account="${html(account.name)}">${
+              expandedAccount === account.name ? "Hide" : "Show"
+            }</button></td></tr>
+            ${renderAccountDetailRow(account)}`
         )
         .join("")
-    : '<tr><td colspan="5" class="muted">No configured accounts returned by the API.</td></tr>';
+    : '<tr><td colspan="6" class="muted">No configured accounts returned by the API.</td></tr>';
 }
 
 function renderServiceBadges(service) {
@@ -225,8 +254,9 @@ async function loadData() {
     renderPlugins(plugins);
     renderServiceBadges(service);
     renderServiceDetails();
-    if (selectedOutput) {
-      showOutputConfig(selectedOutput.accountName, selectedOutput.outputIndex);
+    if (expandedAccount && !accounts.some((account) => account.name === expandedAccount)) {
+      expandedAccount = null;
+      renderAccounts(accounts);
     }
   } catch (error) {
     $("updated").textContent = `API error: ${error.message}`;
@@ -241,14 +271,16 @@ document.addEventListener("click", (event) => {
   if (!target) {
     return;
   }
-  if (target.classList.contains("output-chip")) {
-    showOutputConfig(target.dataset.account, target.dataset.outputIndex);
+  if (target.classList.contains("detail-toggle")) {
+    expandedAccount =
+      expandedAccount === target.dataset.account ? null : target.dataset.account;
+    renderAccounts(latestAccounts);
     return;
   }
-  if (target.classList.contains("service-chip")) {
+  if (target.classList.contains("service-tab")) {
     selectedService = target.dataset.service || "http";
     document
-      .querySelectorAll(".service-chip")
+      .querySelectorAll(".service-tab")
       .forEach((chip) => chip.classList.toggle("is-selected", chip === target));
     renderServiceDetails();
   }
