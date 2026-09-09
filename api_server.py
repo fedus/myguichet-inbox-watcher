@@ -6,6 +6,7 @@ import argparse
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from config import ConfigProvider, EnvConfigProvider
@@ -51,6 +52,10 @@ OPENAPI_TAGS = [
     {
         "name": "documents",
         "description": "Downloaded files visible through folder outputs.",
+    },
+    {
+        "name": "service",
+        "description": "Read-only HTTP and MQTT service configuration.",
     },
 ]
 
@@ -194,6 +199,42 @@ def list_downloaded_documents(
     return documents[:limit]
 
 
+def _env_value(environ: Mapping[str, str], name: str, default: str = "") -> str:
+    return environ.get(name, default).strip()
+
+
+def service_payload(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
+    values = os.environ if environ is None else environ
+    run_mode = _env_value(values, "DOCUMENT_RUN_MODE", "poll") or "poll"
+    mqtt_host = _env_value(values, "DOCUMENT_MQTT_HOST")
+    mqtt_port = _env_value(values, "DOCUMENT_MQTT_PORT", "1883") or "1883"
+    api_host = _env_value(values, "DOCUMENT_API_HOST", DEFAULT_API_HOST)
+    api_port = _env_value(values, "DOCUMENT_API_PORT", str(DEFAULT_API_PORT))
+    return {
+        "run_mode": run_mode,
+        "http": {
+            "serving": True,
+            "bind_host": api_host or DEFAULT_API_HOST,
+            "port": api_port or str(DEFAULT_API_PORT),
+            "dashboard_path": "/",
+            "docs_path": "/docs",
+            "openapi_path": "/openapi.json",
+        },
+        "mqtt": {
+            "configured": bool(mqtt_host),
+            "running": run_mode in {"mqtt", "watcher"},
+            "host": mqtt_host or None,
+            "port": mqtt_port,
+            "trigger_topic": _env_value(values, "DOCUMENT_MQTT_TOPIC", "documents/poll"),
+            "input_topic": _env_value(
+                values, "DOCUMENT_MQTT_INPUT_TOPIC", "documents/input/provide"
+            ),
+            "status_topic": _env_value(values, "DOCUMENT_MQTT_STATUS_TOPIC"),
+            "workers": _env_value(values, "DOCUMENT_MQTT_WORKERS", "1") or "1",
+        },
+    }
+
+
 def create_app(
     config_provider: ConfigProvider | None = None,
     runtime_state: RuntimeState | None = None,
@@ -256,6 +297,10 @@ def create_app(
     @app.get("/api/status", tags=["runtime"])
     def status() -> dict[str, Any]:
         return state.snapshot()
+
+    @app.get("/api/service", tags=["service"])
+    def service() -> dict[str, Any]:
+        return service_payload()
 
     @app.get("/api/documents", tags=["documents"])
     def documents(

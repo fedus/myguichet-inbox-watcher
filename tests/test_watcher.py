@@ -1013,13 +1013,43 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn('src="/assets/app.js"', index)
         self.assertNotIn("<style>", index)
         self.assertNotIn("<script>", index)
+        self.assertIn('id="serviceBadges"', index)
+        self.assertIn('id="outputConfig"', index)
         self.assertIn("const $ = (id) => document.getElementById(id);", javascript)
         self.assertIn("API error:", javascript)
-        self.assertIn("function renderOutputConfig(output)", javascript)
-        self.assertIn('class="output-settings"', javascript)
+        self.assertIn("function renderOutputChip(account, output, index)", javascript)
+        self.assertIn("function showOutputConfig(accountName, outputIndex)", javascript)
+        self.assertIn("fetchJson(\"/api/service\")", javascript)
+        self.assertIn('class="config-list"', javascript)
         self.assertIn("'\"': \"&quot;\"", javascript)
         self.assertNotIn('""":', javascript)
         self.assertNotIn("accountCount.textContent", javascript)
+
+    def test_api_service_payload_exposes_no_credentials(self) -> None:
+        payload = api_server.service_payload(
+            {
+                "DOCUMENT_RUN_MODE": "watcher",
+                "DOCUMENT_API_HOST": "0.0.0.0",
+                "DOCUMENT_API_PORT": "8000",
+                "DOCUMENT_MQTT_HOST": "mqtt.local",
+                "DOCUMENT_MQTT_PORT": "1883",
+                "DOCUMENT_MQTT_USERNAME": "alice",
+                "DOCUMENT_MQTT_PASSWORD": "secret",
+                "DOCUMENT_MQTT_TOPIC": "documents/poll",
+                "DOCUMENT_MQTT_INPUT_TOPIC": "documents/input/provide",
+                "DOCUMENT_MQTT_STATUS_TOPIC": "documents/poll/status",
+                "DOCUMENT_MQTT_WORKERS": "2",
+            }
+        )
+
+        self.assertEqual(payload["run_mode"], "watcher")
+        self.assertEqual(payload["http"]["port"], "8000")
+        self.assertTrue(payload["mqtt"]["configured"])
+        self.assertTrue(payload["mqtt"]["running"])
+        self.assertEqual(payload["mqtt"]["host"], "mqtt.local")
+        self.assertEqual(payload["mqtt"]["workers"], "2")
+        self.assertNotIn("username", payload["mqtt"])
+        self.assertNotIn("password", payload["mqtt"])
 
     def test_api_exposes_configured_accounts_and_runtime_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1053,6 +1083,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("/api/plugins", openapi_paths)
         self.assertIn("/api/accounts", openapi_paths)
         self.assertIn("/api/status", openapi_paths)
+        self.assertIn("/api/service", openapi_paths)
         self.assertIn("/", route_paths)
         self.assertIn("/assets", route_paths)
         self.assertEqual(account_payload["name"], "alice_dkv")

@@ -100,7 +100,8 @@ h2 {
   gap: 7px;
 }
 
-.badge-stack span {
+.service-chip {
+  min-height: auto;
   border: 2px solid #101022;
   background: var(--sun);
   color: #101022;
@@ -111,13 +112,35 @@ h2 {
   box-shadow: 3px 3px 0 #101022;
 }
 
-.badge-stack span:nth-child(2) {
+.service-chip span,
+.service-chip small {
+  display: block;
+}
+
+.service-chip small {
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.service-chip:nth-child(2) {
   background: var(--pink);
   color: #fff;
 }
 
-.badge-stack span:nth-child(3) {
-  background: var(--lime);
+.service-chip.is-selected {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #101022;
+}
+
+.service-chip:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 #101022;
+}
+
+.service-chip.is-selected:hover {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #101022;
 }
 
 main {
@@ -148,7 +171,7 @@ main {
 }
 
 .toolbar a,
-button {
+.toolbar button {
   min-height: 34px;
   border: 2px solid var(--line);
   border-radius: 0;
@@ -164,13 +187,13 @@ button {
 }
 
 .toolbar a:hover,
-button:hover {
+.toolbar button:hover {
   transform: translate(-1px, -1px);
   box-shadow: 4px 4px 0 var(--line);
 }
 
-button:active,
-.toolbar a:active {
+.toolbar a:active,
+.toolbar button:active {
   transform: translate(2px, 2px);
   box-shadow: 1px 1px 0 var(--line);
 }
@@ -263,6 +286,47 @@ table {
   width: 100%;
   border-collapse: collapse;
   font-size: 14px;
+  table-layout: fixed;
+}
+
+.accounts-table th:nth-child(1),
+.accounts-table td:nth-child(1) {
+  width: 26%;
+}
+
+.accounts-table th:nth-child(2),
+.accounts-table td:nth-child(2) {
+  width: 12%;
+}
+
+.accounts-table th:nth-child(3),
+.accounts-table td:nth-child(3) {
+  width: 27%;
+}
+
+.accounts-table th:nth-child(4),
+.accounts-table td:nth-child(4) {
+  width: 25%;
+}
+
+.accounts-table th:nth-child(5),
+.accounts-table td:nth-child(5) {
+  width: 10%;
+}
+
+.documents-table th:nth-child(1),
+.documents-table td:nth-child(1) {
+  width: 28%;
+}
+
+.documents-table th:nth-child(2),
+.documents-table td:nth-child(2) {
+  width: 57%;
+}
+
+.documents-table th:nth-child(3),
+.documents-table td:nth-child(3) {
+  width: 15%;
 }
 
 th,
@@ -296,65 +360,82 @@ code {
   font-family: "Courier New", Courier, monospace;
 }
 
-.output-config {
-  max-width: 360px;
-  margin-bottom: 7px;
-}
-
-.output-config:last-child {
-  margin-bottom: 0;
-}
-
-.output-config summary {
-  display: inline-flex;
+.output-chip {
+  display: inline-block;
   max-width: 100%;
-  align-items: center;
-  gap: 6px;
+  min-height: auto;
+  margin: 0 5px 5px 0;
   border: 1px solid #b9afd7;
+  border-radius: 0;
   background: #fff8d7;
   padding: 3px 7px;
+  color: var(--ink);
   font-family: "Courier New", Courier, monospace;
   font-size: 13px;
   font-weight: 700;
-  cursor: pointer;
-  list-style-position: inside;
-}
-
-.output-config summary span {
   overflow-wrap: anywhere;
+  cursor: pointer;
+  box-shadow: 2px 2px 0 rgba(20, 19, 41, .16);
 }
 
-.output-settings {
+.output-chip:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 rgba(20, 19, 41, .22);
+}
+
+.output-chip:active {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 rgba(20, 19, 41, .22);
+}
+
+.selected-title {
+  margin-bottom: 7px;
+}
+
+.selected-subtitle {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.service-details .config-list,
+.selected-config .config-list {
+  margin-top: 8px;
+}
+
+.config-list {
   display: grid;
   gap: 5px;
-  margin: 8px 0 2px;
+  margin: 0;
   padding: 8px;
   border: 1px dashed #b9afd7;
   background: rgba(255, 255, 255, .64);
 }
 
-.output-settings div {
+.config-list div {
   display: grid;
   grid-template-columns: minmax(72px, .45fr) minmax(0, 1fr);
   gap: 8px;
 }
 
-.output-settings dt,
-.output-settings dd {
+.config-list dt,
+.config-list dd {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
 }
 
-.output-settings dt {
+.config-list dt {
   color: var(--muted);
   font-family: "Courier New", Courier, monospace;
   font-size: 12px;
   font-weight: 700;
 }
 
-.output-empty {
-  margin-top: 8px;
+.config-empty {
   color: var(--muted);
   font-size: 12px;
 }
@@ -538,8 +619,14 @@ code {
     display: grid;
     grid-template-columns: 94px minmax(0, 1fr);
     gap: 10px;
+    width: auto;
     border-bottom: 0;
     padding: 6px 0;
+  }
+
+  .accounts-table td,
+  .documents-table td {
+    width: auto;
   }
 
   td::before {
@@ -551,11 +638,7 @@ code {
     text-transform: uppercase;
   }
 
-  .output-config {
-    max-width: none;
-  }
-
-  .output-settings div {
+  .config-list div {
     grid-template-columns: 1fr;
     gap: 2px;
   }

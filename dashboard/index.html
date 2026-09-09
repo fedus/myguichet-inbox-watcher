@@ -19,10 +19,15 @@
         <h1>Document Watcher</h1>
         <p>Runtime dashboard</p>
       </div>
-      <div class="badge-stack" aria-hidden="true">
-        <span>HTTP</span>
-        <span>MQTT</span>
-        <span>PDF</span>
+      <div class="badge-stack" id="serviceBadges">
+        <button type="button" class="service-chip is-selected" data-service="http">
+          <span>HTTP</span>
+          <small id="httpBadge">loading</small>
+        </button>
+        <button type="button" class="service-chip" data-service="mqtt">
+          <span>MQTT</span>
+          <small id="mqttBadge">loading</small>
+        </button>
       </div>
     </div>
   </header>
@@ -56,7 +61,7 @@
       <div class="panel">
         <h2>Accounts</h2>
         <div class="table-shell">
-          <table>
+          <table class="accounts-table">
             <thead>
               <tr>
                 <th>Account</th>
@@ -76,6 +81,16 @@
           <div id="runtime" class="list"></div>
         </div>
         <div class="panel">
+          <h2>Service</h2>
+          <div id="serviceDetails" class="service-details"></div>
+        </div>
+        <div class="panel">
+          <h2>Output Config</h2>
+          <div id="outputConfig" class="selected-config muted">
+            Select an output in the Accounts table.
+          </div>
+        </div>
+        <div class="panel">
           <h2>Plugins</h2>
           <div id="plugins" class="plugin-list"></div>
         </div>
@@ -84,7 +99,7 @@
     <section class="panel section">
       <h2>Recent Documents</h2>
       <div class="table-shell">
-        <table>
+        <table class="documents-table">
           <thead>
             <tr>
               <th>Account</th>

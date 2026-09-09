@@ -24,6 +24,10 @@ const size = (bytes) => {
   }
   return `${(bytes / 1048576).toFixed(1)} MB`;
 };
+let latestAccounts = [];
+let latestService = null;
+let selectedService = "http";
+let selectedOutput = null;
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -38,12 +42,12 @@ async function fetchJson(url) {
   return response.json();
 }
 
-function renderOutputSettings(settings) {
+function renderKeyValues(settings) {
   const entries = Object.entries(settings || {});
   if (!entries.length) {
-    return '<div class="output-empty">No settings</div>';
+    return '<div class="config-empty">No settings</div>';
   }
-  return `<dl class="output-settings">${entries
+  return `<dl class="config-list">${entries
     .map(
       ([key, value]) =>
         `<div><dt>${html(key)}</dt><dd>${html(value)}</dd></div>`
@@ -51,11 +55,28 @@ function renderOutputSettings(settings) {
     .join("")}</dl>`;
 }
 
-function renderOutputConfig(output) {
-  return `<details class="output-config">
-    <summary><span>${html(output.name)}:${html(output.type)}</span></summary>
-    ${renderOutputSettings(output.settings)}
-  </details>`;
+function renderOutputChip(account, output, index) {
+  return `<button type="button" class="output-chip" data-account="${html(
+    account.name
+  )}" data-output-index="${index}">${html(output.name)}:${html(output.type)}</button>`;
+}
+
+function showOutputConfig(accountName, outputIndex) {
+  const account = latestAccounts.find((item) => item.name === accountName);
+  const output = account?.outputs?.[Number(outputIndex)];
+  if (!account || !output) {
+    selectedOutput = null;
+    $("outputConfig").className = "selected-config muted";
+    $("outputConfig").innerHTML = "Select an output in the Accounts table.";
+    return;
+  }
+  selectedOutput = { accountName, outputIndex };
+  $("outputConfig").className = "selected-config";
+  $("outputConfig").innerHTML = `
+    <div class="selected-title"><code>${html(account.name)}</code></div>
+    <div class="selected-subtitle">${html(output.name)}:${html(output.type)}</div>
+    ${renderKeyValues(output.settings)}
+  `;
 }
 
 function renderAccounts(accounts) {
@@ -68,7 +89,7 @@ function renderAccounts(accounts) {
             )}</code></td><td data-label="Source">${html(
               account.source
             )}</td><td data-label="Outputs">${account.outputs
-              .map(renderOutputConfig)
+              .map((output, index) => renderOutputChip(account, output, index))
               .join("")}</td><td data-label="Last Run">${html(
               account.state.last_run
             )}</td><td data-label="Seen">${html(
@@ -77,6 +98,30 @@ function renderAccounts(accounts) {
         )
         .join("")
     : '<tr><td colspan="5" class="muted">No configured accounts returned by the API.</td></tr>';
+}
+
+function renderServiceBadges(service) {
+  $("httpBadge").textContent = `:${text(service.http.port)}`;
+  if (!service.mqtt.configured) {
+    $("mqttBadge").textContent = "off";
+  } else if (service.mqtt.running) {
+    $("mqttBadge").textContent = "running";
+  } else {
+    $("mqttBadge").textContent = "configured";
+  }
+}
+
+function renderServiceDetails() {
+  if (!latestService) {
+    $("serviceDetails").innerHTML = '<div class="muted">Loading service details.</div>';
+    return;
+  }
+  const details =
+    selectedService === "mqtt" ? latestService.mqtt : latestService.http;
+  $("serviceDetails").innerHTML = `
+    <div class="selected-subtitle">${html(selectedService.toUpperCase())}</div>
+    ${renderKeyValues(details)}
+  `;
 }
 
 function renderRuntime(status) {
@@ -159,12 +204,15 @@ function renderPlugins(plugins) {
 
 async function loadData() {
   try {
-    const [accounts, status, documents, plugins] = await Promise.all([
+    const [accounts, status, documents, plugins, service] = await Promise.all([
       fetchJson("/api/accounts"),
       fetchJson("/api/status"),
       fetchJson("/api/documents?limit=20"),
       fetchJson("/api/plugins"),
+      fetchJson("/api/service"),
     ]);
+    latestAccounts = accounts;
+    latestService = service;
     $("accountCount").textContent = accounts.length;
     $("activeCount").textContent = status.active_polls.length;
     $("inputCount").textContent = status.pending_inputs.length;
@@ -175,6 +223,11 @@ async function loadData() {
     renderDocuments(documents);
     renderEvents(status.recent_events);
     renderPlugins(plugins);
+    renderServiceBadges(service);
+    renderServiceDetails();
+    if (selectedOutput) {
+      showOutputConfig(selectedOutput.accountName, selectedOutput.outputIndex);
+    }
   } catch (error) {
     $("updated").textContent = `API error: ${error.message}`;
     $("runtime").innerHTML = `<div class="error">${html(error.message)}</div>`;
@@ -182,5 +235,23 @@ async function loadData() {
 }
 
 $("refresh").addEventListener("click", loadData);
+document.addEventListener("click", (event) => {
+  const target =
+    event.target instanceof Element ? event.target.closest("button") : null;
+  if (!target) {
+    return;
+  }
+  if (target.classList.contains("output-chip")) {
+    showOutputConfig(target.dataset.account, target.dataset.outputIndex);
+    return;
+  }
+  if (target.classList.contains("service-chip")) {
+    selectedService = target.dataset.service || "http";
+    document
+      .querySelectorAll(".service-chip")
+      .forEach((chip) => chip.classList.toggle("is-selected", chip === target));
+    renderServiceDetails();
+  }
+});
 loadData();
 setInterval(loadData, 10000);
