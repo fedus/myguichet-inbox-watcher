@@ -111,6 +111,16 @@ def main(
                     error_message=str(error),
                 )
                 failed = True
+            except Exception as error:
+                print(f"[{account.name}] Watcher failed: {error}", file=sys.stderr)
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "error",
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
+                failed = True
     except ConfigurationError as error:
         print(f"Watcher failed: {error}", file=sys.stderr)
         runtime_state.record_event(

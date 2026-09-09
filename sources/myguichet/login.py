@@ -128,45 +128,46 @@ def refresh_cookie(
     prepare_private_directory(account.runtime_dir)
     prepare_private_directory(account.profile_dir)
 
-    with sync_playwright() as playwright:
-        context = playwright.chromium.launch_persistent_context(
-            str(account.profile_dir), headless=account.headless
-        )
-        try:
-            page = context.pages[0] if context.pages else context.new_page()
-            print(
-                f"[{account.name}] Opening MyGuichet "
-                f"({'headless' if account.headless else 'visible'} browser) ..."
+    try:
+        with sync_playwright() as playwright:
+            context = playwright.chromium.launch_persistent_context(
+                str(account.profile_dir), headless=account.headless
             )
-            page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-
-            cookie_header = ""
-            if "fpgun-iep-front" in page.url and "TAMLoginServlet" not in page.url:
-                cookie_header = session_cookie_header(context, account.language)
-            if not cookie_header:
-                username, password = load_luxtrust_credentials(account)
-                start_luxtrust_login(page, username, password)
+            try:
+                page = context.pages[0] if context.pages else context.new_page()
                 print(
-                    f"[{account.name}] LuxTrust credentials submitted. "
-                    "Approve the request on your device."
+                    f"[{account.name}] Opening MyGuichet "
+                    f"({'headless' if account.headless else 'visible'} browser) ..."
                 )
-                cookie_header = wait_for_session_cookie(
-                    context, account.language, account.login_timeout_seconds
-                )
+                page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
-            if not cookie_header:
-                raise LoginError(
-                    "The browser did not expose an authenticated MyGuichet session cookie."
-                )
-            atomic_write_text(account.cookie_file, cookie_header + "\n")
-            print(f"[{account.name}] Authenticated session saved to cookie.txt.")
-            return cookie_header
-        except PlaywrightError as error:
-            raise LoginError(
-                "The browser could not complete the MyGuichet login flow."
-            ) from error
-        finally:
-            context.close()
+                cookie_header = ""
+                if "fpgun-iep-front" in page.url and "TAMLoginServlet" not in page.url:
+                    cookie_header = session_cookie_header(context, account.language)
+                if not cookie_header:
+                    username, password = load_luxtrust_credentials(account)
+                    start_luxtrust_login(page, username, password)
+                    print(
+                        f"[{account.name}] LuxTrust credentials submitted. "
+                        "Approve the request on your device."
+                    )
+                    cookie_header = wait_for_session_cookie(
+                        context, account.language, account.login_timeout_seconds
+                    )
+
+                if not cookie_header:
+                    raise LoginError(
+                        "The browser did not expose an authenticated MyGuichet session cookie."
+                    )
+                atomic_write_text(account.cookie_file, cookie_header + "\n")
+                print(f"[{account.name}] Authenticated session saved to cookie.txt.")
+                return cookie_header
+            finally:
+                context.close()
+    except PlaywrightError as error:
+        raise LoginError(
+            "The browser could not complete the MyGuichet login flow."
+        ) from error
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

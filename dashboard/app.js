@@ -31,9 +31,26 @@ let selectedService = "http";
 let selectedLogFilter = "all";
 let expandedAccount = null;
 let eventStream = null;
+const pendingPolls = new Set();
 
 async function fetchJson(url) {
   const response = await fetch(url);
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const body = await response.json();
+      detail = body.detail || detail;
+    } catch (_) {}
+    throw new Error(`${url}: ${detail}`);
+  }
+  return response.json();
+}
+
+async function postJson(url) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+  });
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
     try {
@@ -94,7 +111,7 @@ function renderAccountDetailRow(account) {
     return "";
   }
   return `<tr class="account-detail-row">
-    <td colspan="6">
+    <td colspan="7">
       <div class="account-detail-panel">
         <div>
           <div class="plugin-label">Output configuration</div>
@@ -107,10 +124,14 @@ function renderAccountDetailRow(account) {
 }
 
 function renderAccounts(accounts) {
+  const mqttRunning = Boolean(latestService && latestService.mqtt.running);
   $("accounts").innerHTML = accounts.length
     ? accounts
         .map(
-          (account) => `
+          (account) => {
+            const pollPending = pendingPolls.has(account.name);
+            const pollLabel = pollPending ? "Sending" : "Poll";
+            return `
             <tr><td data-label="Account"><code>${html(
               account.name
             )}</code></td><td data-label="Source">${html(
@@ -121,15 +142,20 @@ function renderAccounts(accounts) {
               account.state.last_run
             )}</td><td data-label="Seen">${html(
               account.state.seen_count
-            )}</td><td data-label="Details"><button type="button" class="detail-toggle${
+            )}</td><td data-label="Poll"><button type="button" class="poll-trigger" data-account="${html(
+              account.name
+            )}" ${
+              mqttRunning && !pollPending ? "" : "disabled"
+            }>${html(pollLabel)}</button></td><td data-label="Details"><button type="button" class="detail-toggle${
               expandedAccount === account.name ? " is-selected" : ""
             }" data-account="${html(account.name)}">${
               expandedAccount === account.name ? "Hide" : "Show"
             }</button></td></tr>
-            ${renderAccountDetailRow(account)}`
+            ${renderAccountDetailRow(account)}`;
+          }
         )
         .join("")
-    : '<tr><td colspan="6" class="muted">No configured accounts returned by the API.</td></tr>';
+    : '<tr><td colspan="7" class="muted">No configured accounts returned by the API.</td></tr>';
 }
 
 function renderServiceBadges(service) {
@@ -281,6 +307,24 @@ function renderPlugins(plugins) {
   `;
 }
 
+async function triggerPoll(accountName) {
+  pendingPolls.add(accountName);
+  renderAccounts(latestAccounts);
+  try {
+    const result = await postJson(
+      `/api/accounts/${encodeURIComponent(accountName)}/poll`
+    );
+    $("updated").textContent = `Poll trigger published for ${result.account}`;
+    await loadData();
+  } catch (error) {
+    $("updated").textContent = `Trigger failed: ${error.message}`;
+    await loadData();
+  } finally {
+    pendingPolls.delete(accountName);
+    renderAccounts(latestAccounts);
+  }
+}
+
 async function loadData() {
   try {
     const [accounts, status, documents, plugins, service] = await Promise.all([
@@ -327,6 +371,13 @@ document.addEventListener("click", (event) => {
     expandedAccount =
       expandedAccount === target.dataset.account ? null : target.dataset.account;
     renderAccounts(latestAccounts);
+    return;
+  }
+  if (target.classList.contains("poll-trigger")) {
+    const account = target.dataset.account;
+    if (account && !target.disabled) {
+      triggerPoll(account);
+    }
     return;
   }
   if (target.classList.contains("service-tab")) {

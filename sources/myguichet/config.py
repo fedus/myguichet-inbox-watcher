@@ -99,7 +99,7 @@ def myguichet_account_from_source(
         luxtrust_password=settings.get("luxtrust_password", ""),
         space_id=_validate_space_id(settings.get("space_id", ""), f"{prefix}SPACE_ID"),
         language=language,
-        headless=_bool_setting(settings, "headless", f"{prefix}HEADLESS", False),
+        headless=_bool_setting(settings, "headless", f"{prefix}HEADLESS", True),
         login_timeout_seconds=_positive_int_setting(
             settings, "login_timeout_seconds", f"{prefix}LOGIN_TIMEOUT_SECONDS", 300
         ),

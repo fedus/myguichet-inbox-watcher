@@ -394,6 +394,22 @@ def worker(
                     source=account.source,
                     **error_fields(error),
                 )
+            except Exception as error:
+                print(f"[{account.name}] Watcher failed: {error}", file=sys.stderr)
+                runtime_state.poll_finished(
+                    account.name,
+                    account.source,
+                    "error",
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
+                event = status_event(
+                    "poll.finished",
+                    "error",
+                    account=account.name,
+                    source=account.source,
+                    **error_fields(error),
+                )
             else:
                 print(f"[{account.name}] Poll finished: {count} new message(s).")
                 runtime_state.poll_finished(

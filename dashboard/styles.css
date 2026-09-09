@@ -285,7 +285,7 @@ table {
 
 .accounts-table th:nth-child(1),
 .accounts-table td:nth-child(1) {
-  width: 24%;
+  width: 22%;
 }
 
 .accounts-table th:nth-child(2),
@@ -295,12 +295,12 @@ table {
 
 .accounts-table th:nth-child(3),
 .accounts-table td:nth-child(3) {
-  width: 24%;
+  width: 22%;
 }
 
 .accounts-table th:nth-child(4),
 .accounts-table td:nth-child(4) {
-  width: 22%;
+  width: 20%;
 }
 
 .accounts-table th:nth-child(5),
@@ -310,6 +310,11 @@ table {
 
 .accounts-table th:nth-child(6),
 .accounts-table td:nth-child(6) {
+  width: 8%;
+}
+
+.accounts-table th:nth-child(7),
+.accounts-table td:nth-child(7) {
   width: 10%;
 }
 
@@ -377,6 +382,7 @@ code {
 }
 
 .detail-toggle,
+.poll-trigger,
 .service-tab,
 .log-filter {
   min-height: 30px;
@@ -393,6 +399,7 @@ code {
 }
 
 .detail-toggle:hover,
+.poll-trigger:hover,
 .service-tab:hover,
 .log-filter:hover {
   transform: translate(-1px, -1px);
@@ -401,6 +408,7 @@ code {
 
 .detail-toggle:active,
 .detail-toggle.is-selected,
+.poll-trigger:active,
 .service-tab:active,
 .service-tab.is-selected,
 .log-filter:active,
@@ -408,6 +416,13 @@ code {
   transform: translate(1px, 1px);
   background: var(--sun);
   box-shadow: 1px 1px 0 var(--line);
+}
+
+.poll-trigger:disabled {
+  cursor: not-allowed;
+  opacity: .48;
+  transform: none;
+  box-shadow: 1px 1px 0 rgba(20, 19, 41, .3);
 }
 
 .service-tabs {

@@ -1019,17 +1019,21 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn('class="service-tab is-selected"', index)
         self.assertIn('id="logLiveState"', index)
         self.assertIn('data-log-filter="error"', index)
+        self.assertIn("<th>Poll</th>", index)
         self.assertIn("<th>Details</th>", index)
         self.assertNotIn('id="outputConfig"', index)
         self.assertIn("const $ = (id) => document.getElementById(id);", javascript)
         self.assertIn("API error:", javascript)
+        self.assertIn("async function postJson(url)", javascript)
+        self.assertIn("async function triggerPoll(accountName)", javascript)
         self.assertIn("function renderOutputPills(outputs)", javascript)
         self.assertIn("function renderAccountDetailRow(account)", javascript)
         self.assertIn("function connectEventStream()", javascript)
         self.assertIn("new EventSource", javascript)
+        self.assertIn('class="poll-trigger"', javascript)
         self.assertIn("fetchJson(\"/api/service\")", javascript)
         self.assertIn('class="config-list"', javascript)
-        self.assertIn('colspan="6"', javascript)
+        self.assertIn('colspan="7"', javascript)
         self.assertIn("'\"': \"&quot;\"", javascript)
         self.assertNotIn('""":', javascript)
         self.assertNotIn("accountCount.textContent", javascript)
@@ -1059,6 +1063,63 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(payload["mqtt"]["workers"], "2")
         self.assertNotIn("username", payload["mqtt"])
         self.assertNotIn("password", payload["mqtt"])
+
+    def test_api_mqtt_poll_trigger_publishes_account_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            account = fake_source_account(Path(temporary_directory))
+            state = RuntimeState()
+            published: dict[str, object] = {}
+
+            def publisher(**kwargs: object) -> None:
+                published.update(kwargs)
+
+            result = api_server.publish_mqtt_poll_trigger(
+                account,
+                state,
+                environ={
+                    "DOCUMENT_RUN_MODE": "watcher",
+                    "DOCUMENT_MQTT_HOST": "mqtt.local",
+                    "DOCUMENT_MQTT_PORT": "1884",
+                    "DOCUMENT_MQTT_TOPIC": "documents/poll",
+                    "DOCUMENT_MQTT_USERNAME": "home_iot",
+                    "DOCUMENT_MQTT_PASSWORD": "secret",
+                },
+                publisher=publisher,
+            )
+
+        self.assertEqual(result["status"], "queued")
+        self.assertEqual(result["account"], account.name)
+        self.assertEqual(published["topic"], "documents/poll")
+        self.assertEqual(published["payload"], '{"account":"alice"}')
+        self.assertEqual(published["hostname"], "mqtt.local")
+        self.assertEqual(published["port"], 1884)
+        self.assertEqual(
+            published["auth"],
+            {"username": "home_iot", "password": "secret"},
+        )
+        events = state.recent_events()
+        self.assertEqual(events[0]["event"], "trigger.published")
+        self.assertEqual(events[0]["status"], "queued")
+
+    def test_api_mqtt_poll_trigger_requires_running_mqtt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            account = fake_source_account(Path(temporary_directory))
+            state = RuntimeState()
+
+            with self.assertRaises(api_server.MqttTriggerUnavailable):
+                api_server.publish_mqtt_poll_trigger(
+                    account,
+                    state,
+                    environ={
+                        "DOCUMENT_RUN_MODE": "api",
+                        "DOCUMENT_MQTT_HOST": "mqtt.local",
+                    },
+                    publisher=lambda **kwargs: None,
+                )
+
+        events = state.recent_events()
+        self.assertEqual(events[0]["event"], "trigger.rejected")
+        self.assertEqual(events[0]["status"], "error")
 
     def test_runtime_state_assigns_event_ids_and_recent_events(self) -> None:
         state = RuntimeState(max_events=2)
@@ -1104,6 +1165,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("/api/health", openapi_paths)
         self.assertIn("/api/plugins", openapi_paths)
         self.assertIn("/api/accounts", openapi_paths)
+        self.assertIn("/api/accounts/{account_name}/poll", openapi_paths)
         self.assertIn("/api/status", openapi_paths)
         self.assertIn("/api/events", openapi_paths)
         self.assertIn("/api/events/stream", openapi_paths)
@@ -1258,6 +1320,27 @@ class WatcherHelpersTest(unittest.TestCase):
             self.assertTrue(myguichet.headless)
             self.assertEqual(myguichet.login_timeout_seconds, 30)
             self.assertEqual(myguichet.cookie_file, root / "cookie.txt")
+
+    def test_myguichet_headless_defaults_to_true(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_myguichet",
+                source="myguichet",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+                source_settings={
+                    "luxtrust_username": "alice-user",
+                    "luxtrust_password": "secret",
+                    "space_id": "123456",
+                },
+            )
+
+            myguichet = myguichet_account_from_source(account)
+
+            self.assertTrue(myguichet.headless)
 
     def test_folder_plugin_owns_output_setting_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

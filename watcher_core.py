@@ -492,7 +492,7 @@ def run_poll(
                 )
             except SourceSessionExpired:
                 raise
-            except (SourceError, OutputError, OSError) as error:
+            except Exception as error:
                 print(
                     f"[{account.name}] Message {message.id} failed: {error}",
                     file=sys.stderr,

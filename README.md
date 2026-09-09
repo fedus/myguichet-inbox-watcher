@@ -439,6 +439,9 @@ Useful endpoints:
 - `GET /api/plugins`
 - `GET /api/accounts`
 - `GET /api/accounts/{account_name}`
+- `POST /api/accounts/{account_name}/poll` publishes a normal MQTT poll trigger
+  for that account. This requires `DOCUMENT_RUN_MODE=watcher` or `mqtt` plus
+  `DOCUMENT_MQTT_HOST`.
 - `GET /api/status`
 - `GET /api/events`
 - `GET /api/events/stream`

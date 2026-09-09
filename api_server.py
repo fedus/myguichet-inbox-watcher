@@ -1,4 +1,4 @@
-"""Read-only REST API and minimal dashboard for the document watcher."""
+"""REST API and minimal dashboard for the document watcher."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import argparse
 import asyncio
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -60,6 +60,15 @@ OPENAPI_TAGS = [
         "description": "Read-only HTTP and MQTT service configuration.",
     },
 ]
+MqttPublisher = Callable[..., None]
+
+
+class MqttTriggerUnavailable(RuntimeError):
+    """MQTT triggering is not available in the current service mode."""
+
+
+class MqttTriggerPublishError(RuntimeError):
+    """Publishing an MQTT poll trigger failed."""
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -75,6 +84,16 @@ def _int_env(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer.") from error
     if result <= 0:
         raise RuntimeError(f"{name} must be positive.")
+    return result
+
+
+def _positive_int_setting(name: str, value: str) -> int:
+    try:
+        result = int(value)
+    except ValueError as error:
+        raise MqttTriggerUnavailable(f"{name} must be a positive integer.") from error
+    if result <= 0:
+        raise MqttTriggerUnavailable(f"{name} must be a positive integer.")
     return result
 
 
@@ -237,6 +256,92 @@ def service_payload(environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     }
 
 
+def mqtt_publish_single(**kwargs: Any) -> None:
+    """Small wrapper to keep the MQTT publish path easy to unit-test."""
+    try:
+        import paho.mqtt.publish as mqtt_publish
+    except ImportError as error:  # pragma: no cover - requirements include paho-mqtt
+        raise MqttTriggerPublishError(
+            "paho-mqtt is not installed. Run pip install -r requirements.txt."
+        ) from error
+    mqtt_publish.single(**kwargs)
+
+
+def publish_mqtt_poll_trigger(
+    account: SourceAccountConfig,
+    state: RuntimeState,
+    *,
+    environ: Mapping[str, str] | None = None,
+    publisher: MqttPublisher | None = None,
+) -> dict[str, Any]:
+    """Publish the regular MQTT poll trigger for one configured account."""
+    values = os.environ if environ is None else environ
+    service = service_payload(values)
+    mqtt = service["mqtt"]
+    if not mqtt["configured"] or not mqtt["running"]:
+        message = (
+            "MQTT poll triggers require DOCUMENT_RUN_MODE=watcher or mqtt and "
+            "DOCUMENT_MQTT_HOST to be set."
+        )
+        state.record_event(
+            "trigger.rejected",
+            "error",
+            account=account.name,
+            source=account.source,
+            message=message,
+        )
+        raise MqttTriggerUnavailable(message)
+
+    topic = str(mqtt["trigger_topic"])
+    payload = json.dumps(
+        {"account": account.name},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    username = _env_value(values, "DOCUMENT_MQTT_USERNAME")
+    password = _env_value(values, "DOCUMENT_MQTT_PASSWORD")
+    auth = {"username": username, "password": password or None} if username else None
+    publish = publisher or mqtt_publish_single
+    try:
+        publish(
+            topic=topic,
+            payload=payload,
+            hostname=str(mqtt["host"]),
+            port=_positive_int_setting("DOCUMENT_MQTT_PORT", str(mqtt["port"])),
+            auth=auth,
+        )
+    except MqttTriggerPublishError:
+        raise
+    except Exception as error:
+        message = f"Could not publish MQTT poll trigger: {error}"
+        state.record_event(
+            "trigger.publish_failed",
+            "error",
+            account=account.name,
+            source=account.source,
+            message=message,
+            details={"topic": topic, "error_type": type(error).__name__},
+        )
+        raise MqttTriggerPublishError(message) from error
+
+    state.record_event(
+        "trigger.published",
+        "queued",
+        account=account.name,
+        source=account.source,
+        message=f"Published MQTT poll trigger to {topic}.",
+        details={"topic": topic},
+    )
+    return {
+        "status": "queued",
+        "account": account.name,
+        "source": account.source,
+        "via": "mqtt",
+        "topic": topic,
+        "payload": {"account": account.name},
+    }
+
+
 def create_app(
     config_provider: ConfigProvider | None = None,
     runtime_state: RuntimeState | None = None,
@@ -247,7 +352,9 @@ def create_app(
     app = FastAPI(
         title="Document Watcher API",
         version="0.1.0",
-        description="Read-only account, plugin, runtime, and downloaded-document views.",
+        description=(
+            "Account, plugin, runtime, downloaded-document, and MQTT trigger views."
+        ),
         openapi_tags=OPENAPI_TAGS,
     )
 
@@ -295,6 +402,22 @@ def create_app(
             if account.name == account_name:
                 return account_payload(account)
         raise HTTPException(status_code=404, detail="Unknown account.")
+
+    @app.post("/api/accounts/{account_name}/poll", tags=["runtime"])
+    def trigger_account_poll(account_name: str) -> dict[str, Any]:
+        selected_account = None
+        for account in accounts():
+            if account.name == account_name:
+                selected_account = account
+                break
+        if selected_account is None:
+            raise HTTPException(status_code=404, detail="Unknown account.")
+        try:
+            return publish_mqtt_poll_trigger(selected_account, state)
+        except MqttTriggerUnavailable as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except MqttTriggerPublishError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
 
     @app.get("/api/status", tags=["runtime"])
     def status() -> dict[str, Any]:
