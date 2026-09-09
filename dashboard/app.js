@@ -140,7 +140,7 @@ function renderAccounts(accounts) {
               `clear:${account.name}`
             );
             const pollLabel = pollPending ? "Sending" : "Poll";
-            const clearLabel = clearPending ? "Clearing" : "Clear Seen";
+            const clearLabel = clearPending ? "Clearing" : "Clear";
             return `
             <tr><td data-label="Account"><code>${html(
               account.name
@@ -158,7 +158,9 @@ function renderAccounts(accounts) {
               mqttRunning && !pollPending ? "" : "disabled"
             }>${html(pollLabel)}</button><button type="button" class="state-trigger clear-seen" data-account="${html(
               account.name
-            )}" ${clearPending ? "disabled" : ""}>${html(
+            )}" title="Clear all seen messages for this source" ${
+              clearPending ? "disabled" : ""
+            }>${html(
               clearLabel
             )}</button></div></td><td data-label="Details"><button type="button" class="detail-toggle${
               expandedAccount === account.name ? " is-selected" : ""

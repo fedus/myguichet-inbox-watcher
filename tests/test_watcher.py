@@ -1062,6 +1062,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("lastPoll.documents", javascript)
         self.assertIn("lastPoll.new_documents", javascript)
         self.assertIn('class="state-trigger clear-seen"', javascript)
+        self.assertIn('title="Clear all seen messages for this source"', javascript)
         self.assertIn('class="state-trigger unsee-document"', javascript)
         self.assertNotIn('fetchJson("/api/documents?limit=20")', javascript)
         self.assertIn("function connectEventStream()", javascript)

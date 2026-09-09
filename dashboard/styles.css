@@ -300,22 +300,22 @@ table {
 
 .accounts-table th:nth-child(4),
 .accounts-table td:nth-child(4) {
-  width: 20%;
+  width: 18%;
 }
 
 .accounts-table th:nth-child(5),
 .accounts-table td:nth-child(5) {
-  width: 8%;
+  width: 7%;
 }
 
 .accounts-table th:nth-child(6),
 .accounts-table td:nth-child(6) {
-  width: 8%;
+  width: 16%;
 }
 
 .accounts-table th:nth-child(7),
 .accounts-table td:nth-child(7) {
-  width: 10%;
+  width: 7%;
 }
 
 .documents-table th:nth-child(1),
@@ -400,6 +400,8 @@ code {
   font: inherit;
   font-size: 13px;
   font-weight: 700;
+  line-height: 1.15;
+  white-space: nowrap;
   cursor: pointer;
   box-shadow: 2px 2px 0 var(--line);
 }
@@ -435,9 +437,10 @@ code {
 }
 
 .account-actions {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, max-content));
   gap: 7px;
+  align-items: start;
 }
 
 .clear-seen {
@@ -784,6 +787,15 @@ code {
   .accounts-table td,
   .documents-table td {
     width: auto;
+  }
+
+  .account-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-actions .poll-trigger,
+  .account-actions .state-trigger {
+    width: 100%;
   }
 
   .account-detail-row td {
