@@ -46,6 +46,7 @@ from sources.dkv import (  # noqa: E402
 )
 from sources.dkv.client import DkvClient  # noqa: E402
 from sources.myguichet import REQUESTS_PER_PAGE, collect_unseen_communications  # noqa: E402
+from sources.myguichet import login as myguichet_login  # noqa: E402
 from sources.myguichet.config import myguichet_account_from_source  # noqa: E402
 from sources.base import (  # noqa: E402
     SourceAccountConfig,
@@ -972,6 +973,28 @@ class WatcherHelpersTest(unittest.TestCase):
             account.output_configs[0].settings["directory"], "downloads/alice"
         )
 
+    def test_env_config_provider_normalizes_compose_quoted_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            provider = config.EnvConfigProvider(
+                environ={
+                    "DOCUMENT_USERS": "alice",
+                    "DOCUMENT_ALICE_MYGUICHET_LUXTRUST_USERNAME": "'alice-user'",
+                    "DOCUMENT_ALICE_MYGUICHET_LUXTRUST_PASSWORD": '"secret"',
+                    "DOCUMENT_ALICE_MYGUICHET_SPACE_ID": "123",
+                    "DOCUMENT_ALICE_MYGUICHET_OUTPUT_FOLDER_DIRECTORY": '"downloads/alice docs"',
+                },
+                root=root,
+            )
+
+            account = provider.get_source_account("alice_myguichet")
+
+        self.assertEqual(account.source_settings["luxtrust_username"], "alice-user")
+        self.assertEqual(account.source_settings["luxtrust_password"], "secret")
+        self.assertEqual(
+            account.output_configs[0].settings["directory"], "downloads/alice docs"
+        )
+
     def test_env_config_provider_loads_dotenv_without_overriding_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1019,6 +1042,9 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn('class="service-tab is-selected"', index)
         self.assertIn('id="logLiveState"', index)
         self.assertIn('data-log-filter="error"', index)
+        self.assertIn("Source Documents Last Crawl", index)
+        self.assertIn("Last Crawl Source Documents", index)
+        self.assertIn('id="documentsTitle"', index)
         self.assertIn("<th>Poll</th>", index)
         self.assertIn("<th>Details</th>", index)
         self.assertNotIn('id="outputConfig"', index)
@@ -1028,6 +1054,11 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("async function triggerPoll(accountName)", javascript)
         self.assertIn("function renderOutputPills(outputs)", javascript)
         self.assertIn("function renderAccountDetailRow(account)", javascript)
+        self.assertIn("function lastPollFrom(status)", javascript)
+        self.assertIn("function renderEventDetails(event)", javascript)
+        self.assertIn("status.last_poll", javascript)
+        self.assertIn("lastPoll.documents", javascript)
+        self.assertIn("lastPoll.new_documents", javascript)
         self.assertIn("function connectEventStream()", javascript)
         self.assertIn("new EventSource", javascript)
         self.assertIn('class="poll-trigger"', javascript)
@@ -1134,6 +1165,35 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(state.latest_event_id(), 3)
         self.assertEqual(state.wait_for_events(2, timeout_seconds=0.01)[0]["event"], "third")
 
+    def test_runtime_state_tracks_last_poll_result(self) -> None:
+        state = RuntimeState()
+
+        state.poll_started("alice_dkv", "dkv")
+        state.document_delivered(
+            "alice_dkv",
+            "dkv",
+            message_id="message-1",
+            document_id="document-1",
+            filename="refund.pdf",
+            content_type="application/pdf",
+            size_bytes=4,
+        )
+        state.poll_finished("alice_dkv", "dkv", "ok", new_messages=104)
+
+        status = state.snapshot()
+        event = status["recent_events"][-1]
+
+        self.assertEqual(status["active_polls"], [])
+        self.assertEqual(status["last_poll"]["account"], "alice_dkv")
+        self.assertEqual(status["last_poll"]["source"], "dkv")
+        self.assertEqual(status["last_poll"]["status"], "ok")
+        self.assertEqual(status["last_poll"]["new_messages"], 104)
+        self.assertEqual(status["last_poll"]["new_documents"], 1)
+        self.assertEqual(status["last_poll"]["documents"][0]["filename"], "refund.pdf")
+        self.assertEqual(event["message"], "1 new document(s) in 104 message(s)")
+        self.assertEqual(event["details"]["new_messages"], 104)
+        self.assertEqual(event["details"]["new_documents"], 1)
+
     def test_api_exposes_configured_accounts_and_runtime_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1178,6 +1238,67 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(status["active_polls"][0]["account"], "alice_dkv")
         self.assertIn("dkv", api_server.available_source_names())
         self.assertIn("folder", api_server.available_output_names())
+
+    def test_api_status_uses_latest_persisted_last_poll(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = SourceAccountConfig(
+                name="alice_dkv",
+                source="dkv",
+                maximum_document_mb=100,
+                runtime_dir=root / "accounts" / "alice_dkv",
+                state_file=root / "accounts" / "alice_dkv" / "state.json",
+                lock_file=root / "accounts" / "alice_dkv" / ".run.lock",
+            )
+            account.state_file.parent.mkdir(parents=True)
+            account.state_file.write_text(
+                json.dumps(
+                    {
+                        "seen_ids": ["1"],
+                        "last_run": "2026-09-09T10:00:00+00:00",
+                        "last_poll": {
+                            "account": "alice_dkv",
+                            "source": "dkv",
+                            "status": "ok",
+                            "finished_at": "2026-09-09T10:00:00+00:00",
+                            "new_messages": 1,
+                            "new_documents": 2,
+                            "failed_messages": 0,
+                            "documents": [
+                                {
+                                    "account": "alice_dkv",
+                                    "source": "dkv",
+                                    "message_id": "1",
+                                    "document_id": "a",
+                                    "filename": "a.pdf",
+                                    "content_type": "application/pdf",
+                                    "size_bytes": 4,
+                                },
+                                {
+                                    "account": "alice_dkv",
+                                    "source": "dkv",
+                                    "message_id": "1",
+                                    "document_id": "b",
+                                    "filename": "b.pdf",
+                                    "content_type": "application/pdf",
+                                    "size_bytes": 5,
+                                },
+                            ],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            status = api_server.merge_status_with_persisted_poll(
+                RuntimeState().snapshot(), [account]
+            )
+
+        self.assertEqual(status["last_poll"]["new_documents"], 2)
+        self.assertEqual(
+            [document["filename"] for document in status["last_poll"]["documents"]],
+            ["a.pdf", "b.pdf"],
+        )
 
     def test_api_lists_folder_output_documents(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -1342,6 +1463,33 @@ class WatcherHelpersTest(unittest.TestCase):
 
             self.assertTrue(myguichet.headless)
 
+    def test_myguichet_detects_rejected_luxtrust_credentials_text(self) -> None:
+        self.assertTrue(
+            myguichet_login._looks_like_rejected_credentials(
+                "Some data you have entered are incorrect. Please try again."
+            )
+        )
+        self.assertFalse(
+            myguichet_login._looks_like_rejected_credentials(
+                "Approve the request on your mobile device."
+            )
+        )
+
+    def test_myguichet_session_cookie_timeout_is_actionable(self) -> None:
+        class Context:
+            def cookies(self) -> list[dict[str, str]]:
+                return []
+
+        with (
+            patch.object(myguichet_login.time, "monotonic", side_effect=[0.0, 2.0]),
+            patch.object(myguichet_login.time, "sleep"),
+            self.assertRaisesRegex(
+                myguichet_login.LoginError,
+                "Timed out after 1s waiting for LuxTrust approval",
+            ),
+        ):
+            myguichet_login.wait_for_session_cookie(Context(), "fr", 1)
+
     def test_folder_plugin_owns_output_setting_parsing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1394,6 +1542,13 @@ class WatcherHelpersTest(unittest.TestCase):
         )
         self.assertEqual(BatchRecordingOutput.delivered, ["content-1", "content-2"])
         self.assertEqual(state["seen_ids"], ["1", "2"])
+        self.assertEqual(state["last_poll"]["status"], "ok")
+        self.assertEqual(state["last_poll"]["new_messages"], 2)
+        self.assertEqual(state["last_poll"]["new_documents"], 2)
+        self.assertEqual(
+            [document["filename"] for document in state["last_poll"]["documents"]],
+            ["1_doc-1_document-1.txt", "2_doc-2_document-2.txt"],
+        )
         self.assertIsNotNone(BatchRecordingOutput.result)
         self.assertEqual(BatchRecordingOutput.result.processed_messages, 2)
         self.assertEqual(BatchRecordingOutput.result.delivered_documents, 2)

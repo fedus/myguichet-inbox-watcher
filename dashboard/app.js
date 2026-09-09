@@ -186,6 +186,32 @@ function eventIsError(event) {
   return ["aborted", "error", "timeout"].includes(event.status);
 }
 
+function lastPollFrom(status) {
+  if (status.last_poll) {
+    return status.last_poll;
+  }
+  return status.recent_events
+    .slice()
+    .reverse()
+    .find((event) => event.event === "poll.finished");
+}
+
+function formatDetailKey(key) {
+  return key.replace(/_/g, " ");
+}
+
+function renderEventDetails(event) {
+  const details = Object.entries(event.details || {}).filter(
+    ([key]) => key !== "error_message"
+  );
+  if (!details.length) {
+    return "";
+  }
+  return `<span class="log-details">${details
+    .map(([key, value]) => `${html(formatDetailKey(key))}: ${html(value)}`)
+    .join(" · ")}</span>`;
+}
+
 function mergeEvents(events) {
   const byId = new Map();
   [...latestEvents, ...events].forEach((event) => byId.set(event.id, event));
@@ -220,6 +246,7 @@ function renderLog() {
                   ? `<span class="log-message">${html(event.message)}</span>`
                   : ""
               }
+              ${renderEventDetails(event)}
             </div>`
         )
         .join("")
@@ -271,7 +298,7 @@ function renderRuntime(status) {
     : '<div class="muted">No active polls or pending inputs.</div>';
 }
 
-function renderDocuments(documents) {
+function renderDocuments(documents, emptyMessage) {
   $("documents").innerHTML = documents.length
     ? documents
         .map(
@@ -285,7 +312,7 @@ function renderDocuments(documents) {
             )}</td></tr>`
         )
         .join("")
-    : '<tr><td colspan="3" class="muted">No folder-output documents found.</td></tr>';
+    : `<tr><td colspan="3" class="muted">${html(emptyMessage)}</td></tr>`;
 }
 
 function renderPlugins(plugins) {
@@ -327,24 +354,33 @@ async function triggerPoll(accountName) {
 
 async function loadData() {
   try {
-    const [accounts, status, documents, plugins, service] = await Promise.all([
+    const [accounts, status, plugins, service] = await Promise.all([
       fetchJson("/api/accounts"),
       fetchJson("/api/status"),
-      fetchJson("/api/documents?limit=20"),
       fetchJson("/api/plugins"),
       fetchJson("/api/service"),
     ]);
     latestAccounts = accounts;
     latestService = service;
+    const lastPoll = lastPollFrom(status);
+    const lastPollDocuments =
+      lastPoll && Array.isArray(lastPoll.documents) ? lastPoll.documents : [];
     $("accountCount").textContent = accounts.length;
     $("activeCount").textContent = status.active_polls.length;
     $("inputCount").textContent = status.pending_inputs.length;
-    $("documentCount").textContent = documents.length;
+    $("documentCount").textContent =
+      lastPoll && lastPoll.new_documents !== undefined ? lastPoll.new_documents : 0;
+    $("documentsTitle").textContent = "Last Crawl Source Documents";
     $("updated").textContent = `Updated ${new Date().toLocaleTimeString()}`;
     mergeEvents(status.recent_events);
     renderAccounts(accounts);
     renderRuntime(status);
-    renderDocuments(documents);
+    renderDocuments(
+      lastPollDocuments,
+      lastPoll
+        ? "The last crawl did not receive any new source documents."
+        : "No crawl document history recorded yet."
+    );
     renderLog();
     renderPlugins(plugins);
     renderServiceBadges(service);

@@ -636,13 +636,15 @@ code {
 
 .log-time,
 .log-source,
-.log-message {
+.log-message,
+.log-details {
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
 .log-time,
-.log-source {
+.log-source,
+.log-details {
   color: var(--muted);
 }
 

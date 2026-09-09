@@ -58,6 +58,18 @@ def _fallback_load_dotenv(path: Path, environ: MutableMapping[str, str]) -> None
         environ[key] = parsed[0] if parsed else ""
 
 
+def _normalize_env_value(value: str) -> str:
+    """Normalize values that may already have been loaded by Docker Compose."""
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
+        try:
+            parsed = shlex.split(stripped, comments=False, posix=True)
+        except ValueError:
+            return stripped[1:-1]
+        return parsed[0] if len(parsed) == 1 else stripped[1:-1]
+    return value
+
+
 def _validate_name(value: str, variable: str, kind: str) -> str:
     result = value.strip().lower()
     if not result or not NAME_PATTERN.fullmatch(result):
@@ -194,7 +206,7 @@ class EnvConfigProvider:
 
     def _raw_prefixed_settings(self, prefix: str) -> dict[str, str]:
         return {
-            variable[len(prefix) :].lower(): value
+            variable[len(prefix) :].lower(): _normalize_env_value(value)
             for variable, value in self.environ.items()
             if variable.startswith(prefix)
         }

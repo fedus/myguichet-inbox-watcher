@@ -32,6 +32,8 @@ from storage import (
 
 SSO_COOKIE_NAME = "LtpaToken2"
 POLL_INTERVAL_SECONDS = 1.0
+LUXTRUST_SUBMIT_ERROR_GRACE_SECONDS = 1.0
+MAX_BROWSER_ERROR_CHARS = 3_500
 
 
 class LoginError(RuntimeError):
@@ -93,7 +95,70 @@ def wait_for_session_cookie(context: Any, language: str, timeout_seconds: int) -
         if cookie_header:
             return cookie_header
         time.sleep(POLL_INTERVAL_SECONDS)
-    raise LoginError("Timed out waiting for LuxTrust device approval.")
+    raise LoginError(
+        f"Timed out after {timeout_seconds}s waiting for LuxTrust approval to "
+        "create a MyGuichet session cookie. Check whether the mobile request was "
+        "approved, rejected, or expired."
+    )
+
+
+def _playwright_error_summary(error: PlaywrightError) -> str:
+    text = str(error).strip()
+    return text.splitlines()[0] if text else type(error).__name__
+
+
+def _playwright_error_details(error: PlaywrightError) -> str:
+    text = str(error).strip()
+    if not text:
+        return type(error).__name__
+    if len(text) > MAX_BROWSER_ERROR_CHARS:
+        return text[:MAX_BROWSER_ERROR_CHARS].rstrip() + " ..."
+    return text
+
+
+def _redact_text(text: str, *secrets: str) -> str:
+    result = text
+    for secret in secrets:
+        if secret:
+            result = result.replace(secret, "***")
+    return result
+
+
+def _visible_text(locator: Any, *secrets: str) -> str:
+    try:
+        text = locator.inner_text(timeout=2_000)
+    except PlaywrightError:
+        return ""
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > 500:
+        text = text[:500].rstrip() + " ..."
+    return _redact_text(text, *secrets)
+
+
+def _looks_like_rejected_credentials(text: str) -> bool:
+    normalized = text.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "data you have entered are incorrect",
+            "entered are incorrect",
+            "incorrect. please try again",
+            "données que vous avez saisies sont incorrectes",
+            "daten sind nicht korrekt",
+        )
+    )
+
+
+def _raise_if_luxtrust_rejected_credentials(
+    luxtrust: Any, username: str, password: str
+) -> None:
+    visible = _visible_text(luxtrust.locator("body"), username, password)
+    if _looks_like_rejected_credentials(visible):
+        raise LoginError(
+            "LuxTrust rejected the configured User ID/password before starting "
+            "mobile approval. Check the account's LUXTRUST_USERNAME and "
+            f"LUXTRUST_PASSWORD settings. Visible LuxTrust text: {visible}"
+        )
 
 
 def start_luxtrust_login(page: Page, username: str, password: str) -> None:
@@ -105,10 +170,13 @@ def start_luxtrust_login(page: Page, username: str, password: str) -> None:
         luxtrust.get_by_role("textbox", name="User ID").fill(username)
         luxtrust.get_by_role("textbox", name="Password").fill(password)
         luxtrust.get_by_role("button", name="Next").click()
+        time.sleep(LUXTRUST_SUBMIT_ERROR_GRACE_SECONDS)
+        _raise_if_luxtrust_rejected_credentials(luxtrust, username, password)
     except PlaywrightError as error:
         raise LoginError(
             "Could not find the expected LuxTrust login controls. "
-            "The portal page may have changed; run with the account's HEADLESS setting disabled."
+            "The portal page may have changed; run with the account's HEADLESS "
+            f"setting disabled. Last browser error: {_playwright_error_summary(error)}"
         ) from error
 
 
@@ -166,7 +234,8 @@ def refresh_cookie(
                 context.close()
     except PlaywrightError as error:
         raise LoginError(
-            "The browser could not complete the MyGuichet login flow."
+            "The browser could not complete the MyGuichet login flow. "
+            f"Last browser error:\n{_playwright_error_details(error)}"
         ) from error
 
 

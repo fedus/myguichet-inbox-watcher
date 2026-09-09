@@ -122,6 +122,7 @@ def state_summary(account: SourceAccountConfig) -> dict[str, Any]:
             "exists": False,
             "seen_count": 0,
             "last_run": None,
+            "last_poll": None,
             "error": None,
         }
     try:
@@ -131,12 +132,14 @@ def state_summary(account: SourceAccountConfig) -> dict[str, Any]:
             "exists": True,
             "seen_count": None,
             "last_run": None,
+            "last_poll": None,
             "error": str(error),
         }
     return {
         "exists": True,
         "seen_count": len(state.get("seen_ids", [])),
         "last_run": state.get("last_run"),
+        "last_poll": state.get("last_poll"),
         "error": None,
     }
 
@@ -218,6 +221,42 @@ def list_downloaded_documents(
                     documents.append(document_payload(path, account))
     documents.sort(key=lambda item: int(item["modified_ns"]), reverse=True)
     return documents[:limit]
+
+
+def latest_persisted_poll(accounts: list[SourceAccountConfig]) -> dict[str, Any] | None:
+    latest: dict[str, Any] | None = None
+    for account in accounts:
+        if not account.state_file.exists():
+            continue
+        try:
+            state = load_state(account)
+        except Exception:
+            continue
+        poll = state.get("last_poll")
+        if not isinstance(poll, dict):
+            continue
+        candidate = dict(poll)
+        candidate.setdefault("account", account.name)
+        candidate.setdefault("source", account.source)
+        if latest is None or str(candidate.get("finished_at", "")) > str(
+            latest.get("finished_at", "")
+        ):
+            latest = candidate
+    return latest
+
+
+def merge_status_with_persisted_poll(
+    status: dict[str, Any], accounts: list[SourceAccountConfig]
+) -> dict[str, Any]:
+    persisted = latest_persisted_poll(accounts)
+    current = status.get("last_poll")
+    if persisted is None:
+        return status
+    if current is None or str(persisted.get("finished_at", "")) > str(
+        current.get("finished_at", "")
+    ):
+        status["last_poll"] = persisted
+    return status
 
 
 def _env_value(environ: Mapping[str, str], name: str, default: str = "") -> str:
@@ -421,7 +460,7 @@ def create_app(
 
     @app.get("/api/status", tags=["runtime"])
     def status() -> dict[str, Any]:
-        return state.snapshot()
+        return merge_status_with_persisted_poll(state.snapshot(), accounts())
 
     @app.get("/api/events", tags=["runtime"])
     def events(limit: int = Query(default=200, ge=1, le=500)) -> list[dict[str, Any]]:

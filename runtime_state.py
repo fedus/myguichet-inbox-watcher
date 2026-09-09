@@ -39,6 +39,7 @@ class RuntimeState:
         self._events: deque[RuntimeEvent] = deque(maxlen=max_events)
         self._active_polls: dict[str, dict[str, Any]] = {}
         self._pending_inputs: dict[str, dict[str, Any]] = {}
+        self._last_poll: dict[str, Any] | None = None
         self._next_event_id = 1
 
     def record_event(
@@ -73,8 +74,35 @@ class RuntimeState:
                 "account": account,
                 "source": source,
                 "started_at": started_at,
+                "documents": [],
             }
         self.record_event("poll.started", "running", account=account, source=source)
+
+    def document_delivered(
+        self,
+        account: str,
+        source: str,
+        *,
+        message_id: str,
+        document_id: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+    ) -> None:
+        item = {
+            "account": account,
+            "source": source,
+            "message_id": message_id,
+            "document_id": document_id,
+            "filename": filename,
+            "content_type": content_type,
+            "size_bytes": size_bytes,
+            "delivered_at": utc_timestamp(),
+        }
+        with self._condition:
+            poll = self._active_polls.get(account)
+            if poll is not None:
+                poll.setdefault("documents", []).append(item)
 
     def poll_finished(
         self,
@@ -94,13 +122,40 @@ class RuntimeState:
         if error_message:
             details["error_message"] = error_message
         with self._condition:
-            self._active_polls.pop(account, None)
+            active_poll = self._active_polls.pop(account, None)
+            documents = list((active_poll or {}).get("documents", []))
+        last_poll: dict[str, Any] = {
+            "account": account,
+            "source": source,
+            "status": status,
+            "finished_at": utc_timestamp(),
+            "new_documents": len(documents),
+            "documents": documents,
+        }
+        if new_messages is not None:
+            last_poll["new_messages"] = new_messages
+            details["new_documents"] = len(documents)
+        if error_type:
+            last_poll["error_type"] = error_type
+        if error_message:
+            last_poll["error_message"] = error_message
+        message = error_message or (
+            (
+                f"{len(documents)} new document(s) in {new_messages} message(s)"
+                if documents
+                else f"{new_messages} new message(s)"
+            )
+            if new_messages is not None
+            else ""
+        )
+        with self._condition:
+            self._last_poll = last_poll
         self.record_event(
             "poll.finished",
             status,
             account=account,
             source=source,
-            message=error_message or "",
+            message=message,
             details=details,
         )
 
@@ -162,10 +217,12 @@ class RuntimeState:
             active_polls = list(self._active_polls.values())
             pending_inputs = list(self._pending_inputs.values())
             events = [event.__dict__ for event in self._events]
+            last_poll = dict(self._last_poll) if self._last_poll is not None else None
         return {
             "active_polls": active_polls,
             "pending_inputs": pending_inputs,
             "recent_events": events,
+            "last_poll": last_poll,
         }
 
     def recent_events(self, limit: int = 200) -> list[dict[str, Any]]:

@@ -417,17 +417,35 @@ def deliver_document(
         output.deliver(account, config, message, document, local_document)
 
 
+def source_document_payload(
+    account: SourceAccountConfig,
+    message: SourceMessage,
+    document: SourceDocument,
+    local_document: LocalDocument,
+) -> dict[str, Any]:
+    """Return persisted metadata for one source document from a handled message."""
+    return {
+        "account": account.name,
+        "source": account.source,
+        "message_id": message.id,
+        "document_id": document.id,
+        "filename": local_document.filename,
+        "content_type": local_document.content_type,
+        "size_bytes": local_document.size_bytes,
+    }
+
+
 def download_documents(
     account: SourceAccountConfig,
     source: DocumentSource,
     context: SourceContext,
     message: SourceMessage,
     outputs: list[tuple[OutputConfig, DocumentOutput]],
-) -> int:
+) -> list[dict[str, Any]]:
     """Fetch all documents for one message and deliver them to every output."""
     documents = source.list_documents(account, context, message)
     maximum_bytes = account.maximum_document_mb * 1024 * 1024
-    downloaded = 0
+    downloaded: list[dict[str, Any]] = []
     for document in documents:
         temporary_path: Path | None = None
         response = source.open_document(account, context, message, document)
@@ -443,22 +461,63 @@ def download_documents(
             response, account.runtime_dir, maximum_bytes
         )
         try:
+            local_document = LocalDocument(
+                path=temporary_path,
+                filename=document_filename(message, document),
+                content_type=document.content_type,
+                size_bytes=size_bytes,
+            )
             deliver_document(
                 account,
                 outputs,
                 message,
                 document,
-                LocalDocument(
-                    path=temporary_path,
-                    filename=document_filename(message, document),
-                    content_type=document.content_type,
-                    size_bytes=size_bytes,
-                ),
+                local_document,
             )
-            downloaded += 1
+            downloaded.append(
+                source_document_payload(
+                    account,
+                    message,
+                    document,
+                    local_document,
+                )
+            )
+            if context.runtime_state is not None:
+                context.runtime_state.document_delivered(
+                    account.name,
+                    account.source,
+                    message_id=message.id,
+                    document_id=document.id,
+                    filename=local_document.filename,
+                    content_type=local_document.content_type,
+                    size_bytes=local_document.size_bytes,
+                )
         finally:
             temporary_path.unlink(missing_ok=True)
     return downloaded
+
+
+def update_last_poll_state(
+    state: dict[str, Any],
+    account: SourceAccountConfig,
+    *,
+    status: str,
+    processed_messages: int,
+    delivered_documents: list[dict[str, Any]],
+    failed_messages: int,
+) -> None:
+    finished_at = utc_now()
+    state["last_run"] = finished_at
+    state["last_poll"] = {
+        "account": account.name,
+        "source": account.source,
+        "status": status,
+        "finished_at": finished_at,
+        "new_messages": processed_messages,
+        "new_documents": len(delivered_documents),
+        "failed_messages": failed_messages,
+        "documents": delivered_documents,
+    }
 
 
 def run_poll(
@@ -473,13 +532,21 @@ def run_poll(
     seen = set(state["seen_ids"])
     messages = source.collect_unseen(account, context, seen)
     if not messages:
-        state["last_run"] = utc_now()
+        update_last_poll_state(
+            state,
+            account,
+            status="ok",
+            processed_messages=0,
+            delivered_documents=[],
+            failed_messages=0,
+        )
         save_state(account, state)
         print(f"[{account.name}] No new messages.")
         return 0
 
     processed = 0
-    delivered_documents = 0
+    delivered_count = 0
+    delivered_documents: list[dict[str, Any]] = []
     failed_messages = 0
     outputs = configured_outputs(account)
     defer_checkpoints = has_batch_finalizers(outputs)
@@ -487,7 +554,7 @@ def run_poll(
         begin_outputs(account, outputs)
         for message in messages:
             try:
-                document_count = download_documents(
+                message_documents = download_documents(
                     account, source, context, message, outputs
                 )
             except SourceSessionExpired:
@@ -514,7 +581,9 @@ def run_poll(
 
             seen.add(message.id)
             processed += 1
-            delivered_documents += document_count
+            document_count = len(message_documents)
+            delivered_count += document_count
+            delivered_documents.extend(message_documents)
             if not defer_checkpoints:
                 state["seen_ids"] = sorted(seen)
                 state["last_run"] = utc_now()
@@ -526,13 +595,21 @@ def run_poll(
 
         result = OutputPollResult(
             processed_messages=processed,
-            delivered_documents=delivered_documents,
+            delivered_documents=delivered_count,
             failed_messages=failed_messages,
         )
         end_outputs(account, outputs, result)
-        if defer_checkpoints:
-            state["seen_ids"] = sorted(seen)
-            state["last_run"] = utc_now()
+        if processed or not failed_messages:
+            update_last_poll_state(
+                state,
+                account,
+                status="error" if failed_messages else "ok",
+                processed_messages=processed,
+                delivered_documents=delivered_documents,
+                failed_messages=failed_messages,
+            )
+            if defer_checkpoints:
+                state["seen_ids"] = sorted(seen)
             save_state(account, state)
     finally:
         close_outputs(outputs)
