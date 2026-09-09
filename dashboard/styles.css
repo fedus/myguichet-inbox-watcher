@@ -296,6 +296,69 @@ code {
   font-family: "Courier New", Courier, monospace;
 }
 
+.output-config {
+  max-width: 360px;
+  margin-bottom: 7px;
+}
+
+.output-config:last-child {
+  margin-bottom: 0;
+}
+
+.output-config summary {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #b9afd7;
+  background: #fff8d7;
+  padding: 3px 7px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.output-config summary span {
+  overflow-wrap: anywhere;
+}
+
+.output-settings {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 2px;
+  padding: 8px;
+  border: 1px dashed #b9afd7;
+  background: rgba(255, 255, 255, .64);
+}
+
+.output-settings div {
+  display: grid;
+  grid-template-columns: minmax(72px, .45fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.output-settings dt,
+.output-settings dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.output-settings dt {
+  color: var(--muted);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.output-empty {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .status {
   display: inline-block;
   border: 2px solid var(--line);
@@ -486,6 +549,15 @@ code {
     font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
+  }
+
+  .output-config {
+    max-width: none;
+  }
+
+  .output-settings div {
+    grid-template-columns: 1fr;
+    gap: 2px;
   }
 }
 

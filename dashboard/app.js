@@ -38,6 +38,26 @@ async function fetchJson(url) {
   return response.json();
 }
 
+function renderOutputSettings(settings) {
+  const entries = Object.entries(settings || {});
+  if (!entries.length) {
+    return '<div class="output-empty">No settings</div>';
+  }
+  return `<dl class="output-settings">${entries
+    .map(
+      ([key, value]) =>
+        `<div><dt>${html(key)}</dt><dd>${html(value)}</dd></div>`
+    )
+    .join("")}</dl>`;
+}
+
+function renderOutputConfig(output) {
+  return `<details class="output-config">
+    <summary><span>${html(output.name)}:${html(output.type)}</span></summary>
+    ${renderOutputSettings(output.settings)}
+  </details>`;
+}
+
 function renderAccounts(accounts) {
   $("accounts").innerHTML = accounts.length
     ? accounts
@@ -48,8 +68,8 @@ function renderAccounts(accounts) {
             )}</code></td><td data-label="Source">${html(
               account.source
             )}</td><td data-label="Outputs">${account.outputs
-              .map((output) => `${html(output.name)}:${html(output.type)}`)
-              .join("<br>")}</td><td data-label="Last Run">${html(
+              .map(renderOutputConfig)
+              .join("")}</td><td data-label="Last Run">${html(
               account.state.last_run
             )}</td><td data-label="Seen">${html(
               account.state.seen_count

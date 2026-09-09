@@ -1015,6 +1015,8 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertNotIn("<script>", index)
         self.assertIn("const $ = (id) => document.getElementById(id);", javascript)
         self.assertIn("API error:", javascript)
+        self.assertIn("function renderOutputConfig(output)", javascript)
+        self.assertIn('class="output-settings"', javascript)
         self.assertIn("'\"': \"&quot;\"", javascript)
         self.assertNotIn('""":', javascript)
         self.assertNotIn("accountCount.textContent", javascript)
