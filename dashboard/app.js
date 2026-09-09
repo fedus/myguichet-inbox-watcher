@@ -43,11 +43,15 @@ function renderAccounts(accounts) {
     ? accounts
         .map(
           (account) =>
-            `<tr><td><code>${html(account.name)}</code></td><td>${html(
+            `<tr><td data-label="Account"><code>${html(
+              account.name
+            )}</code></td><td data-label="Source">${html(
               account.source
-            )}</td><td>${account.outputs
+            )}</td><td data-label="Outputs">${account.outputs
               .map((output) => `${html(output.name)}:${html(output.type)}`)
-              .join("<br>")}</td><td>${html(account.state.last_run)}</td><td>${html(
+              .join("<br>")}</td><td data-label="Last Run">${html(
+              account.state.last_run
+            )}</td><td data-label="Seen">${html(
               account.state.seen_count
             )}</td></tr>`
         )
@@ -82,9 +86,13 @@ function renderDocuments(documents) {
     ? documents
         .map(
           (document) =>
-            `<tr><td><code>${html(document.account)}</code></td><td>${html(
+            `<tr><td data-label="Account"><code>${html(
+              document.account
+            )}</code></td><td data-label="File">${html(
               document.filename
-            )}</td><td>${html(size(document.size_bytes))}</td></tr>`
+            )}</td><td data-label="Size">${html(
+              size(document.size_bytes)
+            )}</td></tr>`
         )
         .join("")
     : '<tr><td colspan="3" class="muted">No folder-output documents found.</td></tr>';
@@ -110,12 +118,32 @@ function renderEvents(events) {
     : '<div class="muted">No runtime events yet.</div>';
 }
 
+function renderPlugins(plugins) {
+  const sourceItems = plugins.sources.map(
+    (source) => `<span class="plugin-pill source">${html(source)}</span>`
+  );
+  const outputItems = plugins.outputs.map(
+    (output) => `<span class="plugin-pill output">${html(output)}</span>`
+  );
+  $("plugins").innerHTML = `
+    <div>
+      <div class="plugin-label">Sources</div>
+      <div class="plugin-pills">${sourceItems.join("")}</div>
+    </div>
+    <div>
+      <div class="plugin-label">Outputs</div>
+      <div class="plugin-pills">${outputItems.join("")}</div>
+    </div>
+  `;
+}
+
 async function loadData() {
   try {
-    const [accounts, status, documents] = await Promise.all([
+    const [accounts, status, documents, plugins] = await Promise.all([
       fetchJson("/api/accounts"),
       fetchJson("/api/status"),
       fetchJson("/api/documents?limit=20"),
+      fetchJson("/api/plugins"),
     ]);
     $("accountCount").textContent = accounts.length;
     $("activeCount").textContent = status.active_polls.length;
@@ -126,6 +154,7 @@ async function loadData() {
     renderRuntime(status);
     renderDocuments(documents);
     renderEvents(status.recent_events);
+    renderPlugins(plugins);
   } catch (error) {
     $("updated").textContent = `API error: ${error.message}`;
     $("runtime").innerHTML = `<div class="error">${html(error.message)}</div>`;

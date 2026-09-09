@@ -8,14 +8,28 @@
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
-  <header>
-    <h1>Document Watcher</h1>
-    <p>Read-only runtime dashboard</p>
+  <header class="app-header">
+    <div class="header-ribbon" aria-hidden="true">
+      <span>***</span>
+      <span>DOCWATCH.EXE</span>
+      <span>***</span>
+    </div>
+    <div class="title-row">
+      <div>
+        <h1>Document Watcher</h1>
+        <p>Runtime dashboard</p>
+      </div>
+      <div class="badge-stack" aria-hidden="true">
+        <span>HTTP</span>
+        <span>MQTT</span>
+        <span>PDF</span>
+      </div>
+    </div>
   </header>
   <main>
     <div class="toolbar">
       <div class="muted" id="updated">Loading...</div>
-      <div>
+      <div class="actions">
         <a href="/docs">Swagger</a>
         <button type="button" id="refresh">Refresh</button>
       </div>
@@ -41,36 +55,46 @@
     <section class="columns">
       <div class="panel">
         <h2>Accounts</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Account</th>
-              <th>Source</th>
-              <th>Outputs</th>
-              <th>Last Run</th>
-              <th>Seen</th>
-            </tr>
-          </thead>
-          <tbody id="accounts"></tbody>
-        </table>
+        <div class="table-shell">
+          <table>
+            <thead>
+              <tr>
+                <th>Account</th>
+                <th>Source</th>
+                <th>Outputs</th>
+                <th>Last Run</th>
+                <th>Seen</th>
+              </tr>
+            </thead>
+            <tbody id="accounts"></tbody>
+          </table>
+        </div>
       </div>
-      <div class="panel">
-        <h2>Runtime</h2>
-        <div id="runtime" class="list"></div>
+      <div class="side-stack">
+        <div class="panel">
+          <h2>Runtime</h2>
+          <div id="runtime" class="list"></div>
+        </div>
+        <div class="panel">
+          <h2>Plugins</h2>
+          <div id="plugins" class="plugin-list"></div>
+        </div>
       </div>
     </section>
     <section class="panel section">
       <h2>Recent Documents</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Account</th>
-            <th>File</th>
-            <th>Size</th>
-          </tr>
-        </thead>
-        <tbody id="documents"></tbody>
-      </table>
+      <div class="table-shell">
+        <table>
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th>File</th>
+              <th>Size</th>
+            </tr>
+          </thead>
+          <tbody id="documents"></tbody>
+        </table>
+      </div>
     </section>
     <section class="panel section">
       <h2>Recent Events</h2>
