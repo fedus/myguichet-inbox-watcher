@@ -16,7 +16,8 @@ from outputs import available_output_names
 from runtime_state import RuntimeState, runtime_state as default_runtime_state
 from sources import available_source_names
 from sources.base import SourceAccountConfig
-from watcher_core import load_state
+from storage import AlreadyRunning
+from watcher_core import StateError, clear_seen_messages, load_state, unsee_message
 
 try:
     from fastapi import FastAPI, HTTPException, Query, Request
@@ -238,6 +239,15 @@ def latest_persisted_poll(accounts: list[SourceAccountConfig]) -> dict[str, Any]
         candidate = dict(poll)
         candidate.setdefault("account", account.name)
         candidate.setdefault("source", account.source)
+        seen_ids = {str(item) for item in state.get("seen_ids", [])}
+        documents = []
+        for document in candidate.get("documents", []):
+            if not isinstance(document, dict):
+                continue
+            item = dict(document)
+            item["seen"] = str(item.get("message_id", "")) in seen_ids
+            documents.append(item)
+        candidate["documents"] = documents
         if latest is None or str(candidate.get("finished_at", "")) > str(
             latest.get("finished_at", "")
         ):
@@ -252,7 +262,7 @@ def merge_status_with_persisted_poll(
     current = status.get("last_poll")
     if persisted is None:
         return status
-    if current is None or str(persisted.get("finished_at", "")) > str(
+    if current is None or str(persisted.get("finished_at", "")) >= str(
         current.get("finished_at", "")
     ):
         status["last_poll"] = persisted
@@ -416,6 +426,12 @@ def create_app(
         except Exception as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
 
+    def account_by_name(account_name: str) -> SourceAccountConfig:
+        for account in accounts():
+            if account.name == account_name:
+                return account
+        raise HTTPException(status_code=404, detail="Unknown account.")
+
     @app.get("/", response_class=FileResponse, include_in_schema=False)
     def dashboard() -> FileResponse:
         return FileResponse(DASHBOARD_INDEX)
@@ -437,26 +453,65 @@ def create_app(
 
     @app.get("/api/accounts/{account_name}", tags=["configuration"])
     def configured_account(account_name: str) -> dict[str, Any]:
-        for account in accounts():
-            if account.name == account_name:
-                return account_payload(account)
-        raise HTTPException(status_code=404, detail="Unknown account.")
+        return account_payload(account_by_name(account_name))
 
     @app.post("/api/accounts/{account_name}/poll", tags=["runtime"])
     def trigger_account_poll(account_name: str) -> dict[str, Any]:
-        selected_account = None
-        for account in accounts():
-            if account.name == account_name:
-                selected_account = account
-                break
-        if selected_account is None:
-            raise HTTPException(status_code=404, detail="Unknown account.")
+        selected_account = account_by_name(account_name)
         try:
             return publish_mqtt_poll_trigger(selected_account, state)
         except MqttTriggerUnavailable as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except MqttTriggerPublishError as error:
             raise HTTPException(status_code=502, detail=str(error)) from error
+
+    @app.post("/api/accounts/{account_name}/seen/clear", tags=["runtime"])
+    def clear_account_seen(account_name: str) -> dict[str, Any]:
+        selected_account = account_by_name(account_name)
+        try:
+            result = clear_seen_messages(selected_account)
+        except AlreadyRunning as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except StateError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+        state.record_event(
+            "seen.cleared",
+            "ok",
+            account=selected_account.name,
+            source=selected_account.source,
+            message=f"Cleared {result['removed_messages']} seen message(s).",
+            details={"removed_messages": result["removed_messages"]},
+        )
+        return result
+
+    @app.post("/api/accounts/{account_name}/seen/unsee", tags=["runtime"])
+    def unsee_account_message(
+        account_name: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        selected_account = account_by_name(account_name)
+        message_id = str(payload.get("message_id", "")).strip()
+        try:
+            result = unsee_message(selected_account, message_id)
+        except AlreadyRunning as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except StateError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        state.record_event(
+            "seen.unset",
+            "ok",
+            account=selected_account.name,
+            source=selected_account.source,
+            message=(
+                f"Marked message {result['message_id']} unseen."
+                if result["removed"]
+                else f"Message {result['message_id']} was not marked seen."
+            ),
+            details={
+                "message_id": result["message_id"],
+                "removed": result["removed"],
+            },
+        )
+        return result
 
     @app.get("/api/status", tags=["runtime"])
     def status() -> dict[str, Any]:

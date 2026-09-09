@@ -97,6 +97,7 @@ class RuntimeState:
             "filename": filename,
             "content_type": content_type,
             "size_bytes": size_bytes,
+            "seen": True,
             "delivered_at": utc_timestamp(),
         }
         with self._condition:

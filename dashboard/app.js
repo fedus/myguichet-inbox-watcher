@@ -32,6 +32,7 @@ let selectedLogFilter = "all";
 let expandedAccount = null;
 let eventStream = null;
 const pendingPolls = new Set();
+const pendingStateActions = new Set();
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -46,10 +47,15 @@ async function fetchJson(url) {
   return response.json();
 }
 
-async function postJson(url) {
+async function postJson(url, payload = null) {
+  const headers = { Accept: "application/json" };
+  if (payload !== null) {
+    headers["Content-Type"] = "application/json";
+  }
   const response = await fetch(url, {
     method: "POST",
-    headers: { Accept: "application/json" },
+    headers,
+    body: payload === null ? undefined : JSON.stringify(payload),
   });
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
@@ -130,7 +136,11 @@ function renderAccounts(accounts) {
         .map(
           (account) => {
             const pollPending = pendingPolls.has(account.name);
+            const clearPending = pendingStateActions.has(
+              `clear:${account.name}`
+            );
             const pollLabel = pollPending ? "Sending" : "Poll";
+            const clearLabel = clearPending ? "Clearing" : "Clear Seen";
             return `
             <tr><td data-label="Account"><code>${html(
               account.name
@@ -142,11 +152,15 @@ function renderAccounts(accounts) {
               account.state.last_run
             )}</td><td data-label="Seen">${html(
               account.state.seen_count
-            )}</td><td data-label="Poll"><button type="button" class="poll-trigger" data-account="${html(
+            )}</td><td data-label="Actions"><div class="account-actions"><button type="button" class="poll-trigger" data-account="${html(
               account.name
             )}" ${
               mqttRunning && !pollPending ? "" : "disabled"
-            }>${html(pollLabel)}</button></td><td data-label="Details"><button type="button" class="detail-toggle${
+            }>${html(pollLabel)}</button><button type="button" class="state-trigger clear-seen" data-account="${html(
+              account.name
+            )}" ${clearPending ? "disabled" : ""}>${html(
+              clearLabel
+            )}</button></div></td><td data-label="Details"><button type="button" class="detail-toggle${
               expandedAccount === account.name ? " is-selected" : ""
             }" data-account="${html(account.name)}">${
               expandedAccount === account.name ? "Hide" : "Show"
@@ -302,17 +316,29 @@ function renderDocuments(documents, emptyMessage) {
   $("documents").innerHTML = documents.length
     ? documents
         .map(
-          (document) =>
+          (document) => {
+            const key = `unsee:${document.account}:${document.message_id}`;
+            const pending = pendingStateActions.has(key);
+            const seen = document.seen !== false;
+            const disabled = !seen || pending || !document.message_id;
+            const label = pending ? "Unseeing" : seen ? "Unsee" : "Unseen";
+            return (
             `<tr><td data-label="Account"><code>${html(
               document.account
             )}</code></td><td data-label="File">${html(
               document.filename
             )}</td><td data-label="Size">${html(
               size(document.size_bytes)
-            )}</td></tr>`
+            )}</td><td data-label="Action"><button type="button" class="state-trigger unsee-document" data-account="${html(
+              document.account
+            )}" data-message-id="${html(document.message_id)}" ${
+              disabled ? "disabled" : ""
+            }>${html(label)}</button></td></tr>`
+            );
+          }
         )
         .join("")
-    : `<tr><td colspan="3" class="muted">${html(emptyMessage)}</td></tr>`;
+    : `<tr><td colspan="4" class="muted">${html(emptyMessage)}</td></tr>`;
 }
 
 function renderPlugins(plugins) {
@@ -349,6 +375,52 @@ async function triggerPoll(accountName) {
   } finally {
     pendingPolls.delete(accountName);
     renderAccounts(latestAccounts);
+  }
+}
+
+async function clearSeen(accountName) {
+  if (
+    !window.confirm(
+      `Clear all persisted seen messages for ${accountName}? The next crawl may fetch them again.`
+    )
+  ) {
+    return;
+  }
+  const key = `clear:${accountName}`;
+  pendingStateActions.add(key);
+  renderAccounts(latestAccounts);
+  try {
+    const result = await postJson(
+      `/api/accounts/${encodeURIComponent(accountName)}/seen/clear`
+    );
+    $("updated").textContent = `Cleared ${result.removed_messages} seen message(s) for ${result.account}`;
+    await loadData();
+  } catch (error) {
+    $("updated").textContent = `Clear failed: ${error.message}`;
+    await loadData();
+  } finally {
+    pendingStateActions.delete(key);
+    renderAccounts(latestAccounts);
+  }
+}
+
+async function unseeDocument(accountName, messageId) {
+  const key = `unsee:${accountName}:${messageId}`;
+  pendingStateActions.add(key);
+  try {
+    const result = await postJson(
+      `/api/accounts/${encodeURIComponent(accountName)}/seen/unsee`,
+      { message_id: messageId }
+    );
+    $("updated").textContent = result.removed
+      ? `Marked message ${result.message_id} unseen for ${result.account}`
+      : `Message ${result.message_id} was already unseen for ${result.account}`;
+    await loadData();
+  } catch (error) {
+    $("updated").textContent = `Unsee failed: ${error.message}`;
+    await loadData();
+  } finally {
+    pendingStateActions.delete(key);
   }
 }
 
@@ -413,6 +485,21 @@ document.addEventListener("click", (event) => {
     const account = target.dataset.account;
     if (account && !target.disabled) {
       triggerPoll(account);
+    }
+    return;
+  }
+  if (target.classList.contains("clear-seen")) {
+    const account = target.dataset.account;
+    if (account && !target.disabled) {
+      clearSeen(account);
+    }
+    return;
+  }
+  if (target.classList.contains("unsee-document")) {
+    const account = target.dataset.account;
+    const messageId = target.dataset.messageId;
+    if (account && messageId && !target.disabled) {
+      unseeDocument(account, messageId);
     }
     return;
   }

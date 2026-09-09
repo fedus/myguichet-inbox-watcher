@@ -115,6 +115,43 @@ def save_state(account: SourceAccountConfig, state: dict[str, Any]) -> None:
     )
 
 
+def clear_seen_messages(account: SourceAccountConfig) -> dict[str, Any]:
+    """Remove all persisted message checkpoints for one configured source account."""
+    prepare_private_directory(account.runtime_dir)
+    with exclusive_lock(account.lock_file):
+        state = load_state(account)
+        before = len(state["seen_ids"])
+        state["seen_ids"] = []
+        save_state(account, state)
+    return {
+        "account": account.name,
+        "source": account.source,
+        "removed_messages": before,
+        "seen_count": 0,
+    }
+
+
+def unsee_message(account: SourceAccountConfig, message_id: str) -> dict[str, Any]:
+    """Remove one persisted message checkpoint for one configured source account."""
+    message = str(message_id).strip()
+    if not message:
+        raise StateError("message_id is required.")
+    prepare_private_directory(account.runtime_dir)
+    with exclusive_lock(account.lock_file):
+        state = load_state(account)
+        before_ids = [str(item) for item in state["seen_ids"]]
+        after_ids = [item for item in before_ids if item != message]
+        state["seen_ids"] = after_ids
+        save_state(account, state)
+    return {
+        "account": account.name,
+        "source": account.source,
+        "message_id": message,
+        "removed": len(after_ids) != len(before_ids),
+        "seen_count": len(after_ids),
+    }
+
+
 def safe_filename(value: object, maximum_length: int = 120) -> str:
     """Return a portable, bounded filename component with no path traversal."""
     text = str(value)

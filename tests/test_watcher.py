@@ -1050,8 +1050,10 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertNotIn('id="outputConfig"', index)
         self.assertIn("const $ = (id) => document.getElementById(id);", javascript)
         self.assertIn("API error:", javascript)
-        self.assertIn("async function postJson(url)", javascript)
+        self.assertIn("async function postJson(url, payload = null)", javascript)
         self.assertIn("async function triggerPoll(accountName)", javascript)
+        self.assertIn("async function clearSeen(accountName)", javascript)
+        self.assertIn("async function unseeDocument(accountName, messageId)", javascript)
         self.assertIn("function renderOutputPills(outputs)", javascript)
         self.assertIn("function renderAccountDetailRow(account)", javascript)
         self.assertIn("function lastPollFrom(status)", javascript)
@@ -1059,6 +1061,9 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("status.last_poll", javascript)
         self.assertIn("lastPoll.documents", javascript)
         self.assertIn("lastPoll.new_documents", javascript)
+        self.assertIn('class="state-trigger clear-seen"', javascript)
+        self.assertIn('class="state-trigger unsee-document"', javascript)
+        self.assertNotIn('fetchJson("/api/documents?limit=20")', javascript)
         self.assertIn("function connectEventStream()", javascript)
         self.assertIn("new EventSource", javascript)
         self.assertIn('class="poll-trigger"', javascript)
@@ -1226,6 +1231,8 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("/api/plugins", openapi_paths)
         self.assertIn("/api/accounts", openapi_paths)
         self.assertIn("/api/accounts/{account_name}/poll", openapi_paths)
+        self.assertIn("/api/accounts/{account_name}/seen/clear", openapi_paths)
+        self.assertIn("/api/accounts/{account_name}/seen/unsee", openapi_paths)
         self.assertIn("/api/status", openapi_paths)
         self.assertIn("/api/events", openapi_paths)
         self.assertIn("/api/events/stream", openapi_paths)
@@ -1295,10 +1302,44 @@ class WatcherHelpersTest(unittest.TestCase):
             )
 
         self.assertEqual(status["last_poll"]["new_documents"], 2)
+        self.assertTrue(status["last_poll"]["documents"][0]["seen"])
         self.assertEqual(
             [document["filename"] for document in status["last_poll"]["documents"]],
             ["a.pdf", "b.pdf"],
         )
+
+    def test_seen_state_can_be_cleared_per_account(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = fake_source_account(root)
+            account.state_file.write_text(
+                json.dumps({"seen_ids": ["1", "2"], "last_run": "now"}),
+                encoding="utf-8",
+            )
+
+            result = watcher_core.clear_seen_messages(account)
+            state = watcher_core.load_state(account)
+
+        self.assertEqual(result["removed_messages"], 2)
+        self.assertEqual(result["seen_count"], 0)
+        self.assertEqual(state["seen_ids"], [])
+
+    def test_seen_state_can_unsee_one_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = fake_source_account(root)
+            account.state_file.write_text(
+                json.dumps({"seen_ids": ["1", "2"], "last_run": "now"}),
+                encoding="utf-8",
+            )
+
+            result = watcher_core.unsee_message(account, "1")
+            state = watcher_core.load_state(account)
+
+        self.assertTrue(result["removed"])
+        self.assertEqual(result["message_id"], "1")
+        self.assertEqual(result["seen_count"], 1)
+        self.assertEqual(state["seen_ids"], ["2"])
 
     def test_api_lists_folder_output_documents(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
