@@ -2,8 +2,8 @@
 
 This small, unofficial tool checks configured document inboxes, fetches
 documents it has not processed before, and sends those documents to configured
-outputs. It ships with MyGuichet and DKV/Lalux EasyApp source plugins, plus a
-folder output plugin.
+outputs. It ships with MyGuichet, DKV/Lalux EasyApp, and ProSyndic source
+plugins, plus a folder output plugin.
 
 MyGuichet uses the normal MyGuichet/LuxTrust login flow: the username and
 password can be entered by Playwright, but the LuxTrust mobile/device approval
@@ -24,6 +24,7 @@ The project is designed for a private macOS or Linux machine with Python 3.10+.
 | `sources/base.py` | Small protocol a document source implements. |
 | `sources/dkv/` | DKV/Lalux EasyApp source plugin: config, OAuth/SMS OTP client, reimbursement adapter. |
 | `sources/myguichet/` | MyGuichet source plugin: config, API client, LuxTrust login, source adapter, and probe command. |
+| `sources/prosyndic/` | ProSyndic source plugin: config, HTTP login/listing/download client, nested-folder adapter. |
 | `outputs/base.py` | Small protocol a document output implements. |
 | `outputs/folder/` | Folder output plugin: path/mode config and atomic local file delivery. |
 | `mqtt_trigger.py` | Long-running MQTT subscriber that triggers one-account or all-account polling. |
@@ -137,15 +138,15 @@ plugins validate their own settings after generic wiring has selected them.
 This example has:
 
 - users: Alice and Bob
-- source plugins: `myguichet`, `dkv`, and a made-up `otherservice`
+- source plugins: `myguichet`, `dkv`, `prosyndic`, and a made-up `otherservice`
 - output plugins: the built-in `folder` output and a made-up `example_api`
 - Alice uses only `myguichet`
-- Bob uses both `myguichet` and `otherservice`
+- Bob uses `myguichet`, `dkv`, `prosyndic`, and `otherservice`
 
 ```dotenv
 DOCUMENT_USERS=alice,bob
 DOCUMENT_ALICE_SOURCES=myguichet
-DOCUMENT_BOB_SOURCES=myguichet,dkv,otherservice
+DOCUMENT_BOB_SOURCES=myguichet,dkv,prosyndic,otherservice
 
 # Alice: MyGuichet -> folder + API
 DOCUMENT_ALICE_MYGUICHET_LUXTRUST_USERNAME=alice-luxtrust-user
@@ -173,6 +174,14 @@ DOCUMENT_BOB_DKV_OTP_TIMEOUT_SECONDS=300
 DOCUMENT_BOB_DKV_OUTPUTS=local:folder
 DOCUMENT_BOB_DKV_OUTPUT_LOCAL_DIRECTORY=/srv/documents/bob/dkv
 
+# Bob: ProSyndic documents -> folder only
+DOCUMENT_BOB_PROSYNDIC_BASE_URL=https://bob-tenant.prosyndic-delta.lu
+DOCUMENT_BOB_PROSYNDIC_USERNAME=bob-prosyndic-user
+DOCUMENT_BOB_PROSYNDIC_PASSWORD=bob-prosyndic-password
+DOCUMENT_BOB_PROSYNDIC_PAGE_LIMIT=100
+DOCUMENT_BOB_PROSYNDIC_OUTPUTS=local:folder
+DOCUMENT_BOB_PROSYNDIC_OUTPUT_LOCAL_DIRECTORY=/srv/documents/bob/prosyndic
+
 # Bob: OtherService -> folder + API
 DOCUMENT_BOB_OTHERSERVICE_USERNAME=bob-other-user
 DOCUMENT_BOB_OTHERSERVICE_PASSWORD=bob-other-password
@@ -183,7 +192,8 @@ DOCUMENT_BOB_OTHERSERVICE_OUTPUT_ARCHIVE_TOKEN=bob-api-token
 ```
 
 The `example_api` and `otherservice` plugins above are illustrative names; this
-repo currently implements `myguichet` and `dkv` sources and the `folder` output.
+repo currently implements `myguichet`, `dkv`, and `prosyndic` sources and the
+`folder` output.
 
 ## Folder Output
 
@@ -250,6 +260,24 @@ The first login submits username/password, requests an SMS OTP, and waits for
 that OTP through the generic external-input broker. Successful OAuth tokens are
 stored in the account runtime directory as `dkv_token.json`; later runs reuse
 the refresh token until the service rejects or expires it.
+
+## ProSyndic Source
+
+The `prosyndic` source logs in with username/password, recursively reads the
+document folder tree, follows paginated folder listings, and downloads listed
+documents from `/extranet/documents/download/<id>`. It does not require
+Playwright or OTP based on the captured portal flow.
+
+```dotenv
+DOCUMENT_<USER>_PROSYNDIC_BASE_URL=https://your-tenant.prosyndic-delta.lu
+DOCUMENT_<USER>_PROSYNDIC_USERNAME=your-login
+DOCUMENT_<USER>_PROSYNDIC_PASSWORD=your-password
+DOCUMENT_<USER>_PROSYNDIC_PAGE_LIMIT=100
+```
+
+`BASE_URL` is required because ProSyndic uses tenant-specific hostnames. Each
+remote ProSyndic document is treated as one source message, so clearing or
+unseeing persisted state works at document granularity.
 
 ## External Input and OTP
 

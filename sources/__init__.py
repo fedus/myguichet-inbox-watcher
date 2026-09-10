@@ -54,7 +54,9 @@ def _register_built_ins() -> None:
         return
     from sources.dkv import DkvDocumentSource
     from sources.myguichet import MyGuichetDocumentSource
+    from sources.prosyndic import ProSyndicDocumentSource
 
     register_source("dkv", DkvDocumentSource)
     register_source("myguichet", MyGuichetDocumentSource)
+    register_source("prosyndic", ProSyndicDocumentSource)
     _BUILT_INS_REGISTERED = True

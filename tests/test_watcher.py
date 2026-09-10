@@ -48,6 +48,11 @@ from sources.dkv.client import DkvClient  # noqa: E402
 from sources.myguichet import REQUESTS_PER_PAGE, collect_unseen_communications  # noqa: E402
 from sources.myguichet import login as myguichet_login  # noqa: E402
 from sources.myguichet.config import myguichet_account_from_source  # noqa: E402
+from sources.prosyndic import (  # noqa: E402
+    ProSyndicDocumentSource,
+    collect_documents as collect_prosyndic_documents,
+    prosyndic_account_from_source,
+)
 from sources.base import (  # noqa: E402
     SourceAccountConfig,
     SourceContext,
@@ -138,6 +143,31 @@ class FakeDkvAuthClient:
     def list_refunds(self, page_index: int, limit: int) -> dict[str, object]:
         del page_index, limit
         return {"groups": [{"items": []}], "pagingInfo": {"limit": 20, "offset": 0, "total": 0}}
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeProSyndicClient:
+    def __init__(self, pages: dict[tuple[str | None, int], dict[str, object]]) -> None:
+        self.pages = pages
+        self.requested_pages: list[tuple[str | None, int, int]] = []
+        self.logged_in: list[tuple[str, str]] = []
+        self.downloaded_documents: list[str] = []
+        self.closed = False
+
+    def login(self, username: str, password: str) -> None:
+        self.logged_in.append((username, password))
+
+    def list_folder(
+        self, folder_id: str | None, page: int, limit: int
+    ) -> dict[str, object]:
+        self.requested_pages.append((folder_id, page, limit))
+        return self.pages[(folder_id, page)]
+
+    def download_document(self, document_id: str) -> FakeResponse:
+        self.downloaded_documents.append(document_id)
+        return FakeResponse([b"%PDF-1.4\n"])
 
     def close(self) -> None:
         self.closed = True
@@ -736,6 +766,156 @@ class WatcherHelpersTest(unittest.TestCase):
         )
         self.assertEqual(fake_session.calls[0][1]["params"], {"idFile": "IIS#18660489"})
         self.assertTrue(fake_session.calls[0][1]["stream"])
+
+    def test_prosyndic_config_requires_https_base_url(self) -> None:
+        account = SourceAccountConfig(
+            name="alice_prosyndic",
+            source="prosyndic",
+            maximum_document_mb=100,
+            runtime_dir=Path("/tmp/alice_prosyndic"),
+            state_file=Path("/tmp/alice_prosyndic/state.json"),
+            lock_file=Path("/tmp/alice_prosyndic/.run.lock"),
+            source_settings={
+                "base_url": "https://tenant.prosyndic-delta.lu",
+                "username": "alice",
+                "password": "secret",
+                "page_limit": "50",
+            },
+        )
+
+        prosyndic = prosyndic_account_from_source(account)
+
+        self.assertEqual(prosyndic.base_url, "https://tenant.prosyndic-delta.lu")
+        self.assertEqual(prosyndic.page_limit, 50)
+
+    def test_prosyndic_traverses_nested_paginated_folders(self) -> None:
+        client = FakeProSyndicClient(
+            {
+                (None, 1): {
+                    "data": {
+                        "Classeurs": [
+                            {"id": "10", "nom": "Root folder", "parent": None}
+                        ],
+                        "Documents": [],
+                    },
+                    "pages": {"current": 1, "last": 1},
+                },
+                ("10", 1): {
+                    "data": {
+                        "Classeurs": [
+                            {"id": "11", "nom": "Nested", "parent": "10"}
+                        ],
+                        "Documents": [
+                            {
+                                "id": "doc-newer",
+                                "title": "Newer.pdf",
+                                "mime_type": "application/pdf",
+                                "date_commit": "2026-02-01 10:00:00",
+                            }
+                        ],
+                    },
+                    "pages": {"current": 1, "last": 2},
+                },
+                ("10", 2): {
+                    "data": {
+                        "Classeurs": [],
+                        "Documents": [
+                            {
+                                "id": "doc-older",
+                                "title": "Older.pdf",
+                                "mime_type": "application/pdf",
+                                "date_commit": "2026-01-01 10:00:00",
+                            }
+                        ],
+                    },
+                    "pages": {"current": 2, "last": 2},
+                },
+                ("11", 1): {
+                    "data": {
+                        "Classeurs": [],
+                        "Documents": [
+                            {
+                                "id": "doc-nested",
+                                "title": "Nested",
+                                "mime_type": "application/pdf",
+                                "date_commit": "2026-03-01 10:00:00",
+                            }
+                        ],
+                    },
+                    "pages": {"current": 1, "last": 1},
+                },
+            }
+        )
+
+        documents = collect_prosyndic_documents(client, page_limit=50)  # type: ignore[arg-type]
+
+        self.assertEqual(
+            [document.id for document in documents],
+            ["doc-older", "doc-newer", "doc-nested"],
+        )
+        self.assertEqual(documents[2].folder_path, ("Root folder", "Nested"))
+        self.assertEqual(
+            client.requested_pages,
+            [(None, 1, 50), ("10", 1, 50), ("10", 2, 50), ("11", 1, 50)],
+        )
+
+    def test_prosyndic_source_maps_each_remote_document_as_one_message(self) -> None:
+        fake_client = FakeProSyndicClient(
+            {
+                (None, 1): {
+                    "data": {
+                        "Classeurs": [],
+                        "Documents": [
+                            {
+                                "id": "56792",
+                                "title": "DARWIN - PV AG 2026 - Signé.pdf",
+                                "mime_type": "application/pdf",
+                                "date_commit": "2026-06-19 08:48:25",
+                            },
+                            {
+                                "id": "44836",
+                                "title": "Already seen.pdf",
+                                "mime_type": "application/pdf",
+                                "date_commit": "2026-01-01 00:00:00",
+                            },
+                        ],
+                    },
+                    "pages": {"current": 1, "last": 1},
+                },
+            }
+        )
+        account = SourceAccountConfig(
+            name="alice_prosyndic",
+            source="prosyndic",
+            maximum_document_mb=100,
+            runtime_dir=Path("/tmp/alice_prosyndic"),
+            state_file=Path("/tmp/alice_prosyndic/state.json"),
+            lock_file=Path("/tmp/alice_prosyndic/.run.lock"),
+            source_settings={
+                "base_url": "https://tenant.prosyndic-delta.lu",
+                "username": "alice",
+                "password": "secret",
+            },
+        )
+        source = ProSyndicDocumentSource(lambda base_url: fake_client)  # type: ignore[arg-type]
+
+        messages = source.collect_unseen(
+            account, SourceContext(CliInputBroker()), seen={"44836"}
+        )
+        documents = source.list_documents(
+            account, SourceContext(CliInputBroker()), messages[0]
+        )
+        response = source.open_document(
+            account, SourceContext(CliInputBroker()), messages[0], documents[0]
+        )
+
+        self.assertEqual([message.id for message in messages], ["56792"])
+        self.assertEqual(documents[0].id, "56792")
+        self.assertEqual(documents[0].name, "DARWIN - PV AG 2026 - Signé.pdf")
+        self.assertEqual(documents[0].content_type, "application/pdf")
+        self.assertEqual(fake_client.logged_in, [("alice", "secret")])
+        self.assertEqual(fake_client.downloaded_documents, ["56792"])
+        response.close()
 
     def test_poll_account_refreshes_an_expired_session_once_then_retries(self) -> None:
         ExpiringSource.refreshed = False
