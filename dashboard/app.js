@@ -25,7 +25,7 @@ const size = (bytes) => {
   return `${(bytes / 1048576).toFixed(1)} MB`;
 };
 const THEME_STORAGE_KEY = "documentWatcherTheme";
-const THEMES = new Set(["default", "win95"]);
+const THEMES = new Set(["default", "modern", "cyber", "cli", "win95"]);
 let latestAccounts = [];
 let latestEvents = [];
 let latestService = null;
