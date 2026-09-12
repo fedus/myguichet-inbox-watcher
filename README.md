@@ -119,6 +119,7 @@ For a user/source pair, settings have this shape:
 DOCUMENT_<USER>_SOURCES=<source-plugin>,<source-plugin>
 DOCUMENT_<USER>_<SOURCE_PLUGIN>_<SOURCE_SETTING>=...
 DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUTS=<output-type> or <output-name>:<output-type>
+DOCUMENT_OUTPUT_<OUTPUT_TYPE>_<OUTPUT_SETTING>=...
 DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUT_<OUTPUT_NAME>_<OUTPUT_SETTING>=...
 ```
 
@@ -130,8 +131,10 @@ DOCUMENT_<USER>_<SOURCE_PLUGIN>_MAX_DOCUMENT_MB=100
 ```
 
 `RUNTIME_DIR` defaults to `accounts/<account>`. `MAX_DOCUMENT_MB` defaults to
-`100` and applies before a document is handed to outputs. Source and output
-plugins validate their own settings after generic wiring has selected them.
+`100` and applies before a document is handed to outputs. Output-type defaults
+apply to every instance of that output plugin, and per-user/source output
+settings override them. Source and output plugins validate their own settings
+after generic wiring has selected them.
 
 ## Full Example
 
@@ -201,6 +204,8 @@ The folder output saves staged documents atomically into a local directory.
 
 ```dotenv
 DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUTS=local:folder
+DOCUMENT_OUTPUT_FOLDER_FILE_MODE=0600
+DOCUMENT_OUTPUT_FOLDER_DIR_MODE=0700
 DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUT_LOCAL_DIRECTORY=downloads/<user>_<source>
 DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUT_LOCAL_FILE_MODE=0600
 DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUT_LOCAL_DIR_MODE=0700
@@ -208,6 +213,10 @@ DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUT_LOCAL_DIR_MODE=0700
 
 If an account omits `OUTPUTS`, it defaults to one output named `folder` of type
 `folder`, writing to `downloads/<account>`.
+
+The `DOCUMENT_OUTPUT_FOLDER_*` values are optional defaults for every `folder`
+output. A named output can override any of them with
+`DOCUMENT_<USER>_<SOURCE_PLUGIN>_OUTPUT_<OUTPUT_NAME>_*`.
 
 Existing output directories are not chmodded. This matters for Docker bind
 mounts and NFS shares such as a Paperless-ngx consume folder: set the folder

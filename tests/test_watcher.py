@@ -1660,6 +1660,33 @@ class WatcherHelpersTest(unittest.TestCase):
             self.assertEqual((mailer.name, mailer.type), ("mailer", "email"))
             self.assertEqual(mailer.settings["url"], "https://example.invalid/send")
 
+    def test_env_config_provider_supports_output_type_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            environment = {
+                "DOCUMENT_USERS": "alice",
+                "DOCUMENT_ALICE_SOURCES": "taxbox",
+                "DOCUMENT_OUTPUT_FOLDER_FILE_MODE": "0664",
+                "DOCUMENT_OUTPUT_FOLDER_DIR_MODE": "0775",
+                "DOCUMENT_ALICE_TAXBOX_OUTPUTS": "local:folder,paperless:folder",
+                "DOCUMENT_ALICE_TAXBOX_OUTPUT_LOCAL_DIRECTORY": str(root / "local"),
+                "DOCUMENT_ALICE_TAXBOX_OUTPUT_PAPERLESS_DIRECTORY": str(
+                    root / "paperless"
+                ),
+                "DOCUMENT_ALICE_TAXBOX_OUTPUT_PAPERLESS_FILE_MODE": "0640",
+            }
+            provider = config.EnvConfigProvider(environ=environment, root=root)
+
+            account = provider.get_source_account("alice:taxbox")
+
+        local, paperless = account.output_configs
+        self.assertEqual(local.settings["file_mode"], "0664")
+        self.assertEqual(local.settings["dir_mode"], "0775")
+        self.assertEqual(local.settings["directory"], str(root / "local"))
+        self.assertEqual(paperless.settings["file_mode"], "0640")
+        self.assertEqual(paperless.settings["dir_mode"], "0775")
+        self.assertEqual(paperless.settings["directory"], str(root / "paperless"))
+
     def test_myguichet_plugin_owns_source_setting_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

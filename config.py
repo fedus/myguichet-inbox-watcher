@@ -120,6 +120,10 @@ def _output_prefix(user: str, source: str, output_name: str) -> str:
     return f"{_account_prefix(user, source)}OUTPUT_{output_name.upper()}_"
 
 
+def _output_type_defaults_prefix(output_type: str) -> str:
+    return f"DOCUMENT_OUTPUT_{output_type.upper()}_"
+
+
 def _known_source_names() -> set[str]:
     from sources import available_source_names
 
@@ -246,13 +250,19 @@ class EnvConfigProvider:
         raw_specs = self.environ.get(variable, "folder")
         configs: list[OutputConfig] = []
         for output_name, output_type in _parse_output_specs(raw_specs, variable):
+            settings = {
+                **self._raw_prefixed_settings(
+                    _output_type_defaults_prefix(output_type)
+                ),
+                **self._raw_prefixed_settings(
+                    _output_prefix(user, source, output_name)
+                ),
+            }
             configs.append(
                 OutputConfig(
                     name=output_name,
                     type=output_type,
-                    settings=self._raw_prefixed_settings(
-                        _output_prefix(user, source, output_name)
-                    ),
+                    settings=settings,
                 )
             )
         return tuple(configs)
