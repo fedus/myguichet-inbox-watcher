@@ -24,6 +24,8 @@ const size = (bytes) => {
   }
   return `${(bytes / 1048576).toFixed(1)} MB`;
 };
+const THEME_STORAGE_KEY = "documentWatcherTheme";
+const THEMES = new Set(["default", "win95"]);
 let latestAccounts = [];
 let latestEvents = [];
 let latestService = null;
@@ -33,6 +35,40 @@ let expandedAccount = null;
 let eventStream = null;
 const pendingPolls = new Set();
 const pendingStateActions = new Set();
+
+function normalizeTheme(value) {
+  return THEMES.has(value) ? value : "default";
+}
+
+function applyTheme(theme) {
+  const normalized = normalizeTheme(theme);
+  document.documentElement.dataset.theme = normalized;
+  const select = $("themeSelect");
+  if (select) {
+    select.value = normalized;
+  }
+  return normalized;
+}
+
+function loadTheme() {
+  let saved = "default";
+  try {
+    saved = window.localStorage.getItem(THEME_STORAGE_KEY) || "default";
+  } catch (_) {}
+  const normalized = applyTheme(saved);
+  if (normalized !== saved) {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, normalized);
+    } catch (_) {}
+  }
+}
+
+function saveTheme(theme) {
+  const normalized = applyTheme(theme);
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, normalized);
+  } catch (_) {}
+}
 
 async function fetchJson(url) {
   const response = await fetch(url);
@@ -471,6 +507,9 @@ async function loadData() {
 }
 
 $("refresh").addEventListener("click", loadData);
+$("themeSelect").addEventListener("change", (event) => {
+  saveTheme(event.target.value);
+});
 document.addEventListener("click", (event) => {
   const target =
     event.target instanceof Element ? event.target.closest("button") : null;
@@ -521,5 +560,6 @@ document.addEventListener("click", (event) => {
     renderLog();
   }
 });
+loadTheme();
 loadData();
 setInterval(loadData, 10000);

@@ -1213,6 +1213,9 @@ class WatcherHelpersTest(unittest.TestCase):
         javascript = (api_server.DASHBOARD_DIR / "app.js").read_text(
             encoding="utf-8"
         )
+        styles = (api_server.DASHBOARD_DIR / "styles.css").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn('href="/assets/styles.css"', index)
         self.assertIn('src="/assets/app.js"', index)
@@ -1221,6 +1224,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn('id="serviceBadges"', index)
         self.assertIn('class="service-tab is-selected"', index)
         self.assertIn('id="logLiveState"', index)
+        self.assertIn('id="themeSelect"', index)
         self.assertIn('data-log-filter="error"', index)
         self.assertIn("Source Documents Last Crawl", index)
         self.assertIn("Last Crawl Source Documents", index)
@@ -1234,10 +1238,15 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("async function triggerPoll(accountName)", javascript)
         self.assertIn("async function clearSeen(accountName)", javascript)
         self.assertIn("async function unseeDocument(accountName, messageId)", javascript)
+        self.assertIn('const THEME_STORAGE_KEY = "documentWatcherTheme"', javascript)
+        self.assertIn("function normalizeTheme(value)", javascript)
+        self.assertIn("function saveTheme(theme)", javascript)
         self.assertIn("function renderOutputPills(outputs)", javascript)
         self.assertIn("function renderAccountDetailRow(account)", javascript)
         self.assertIn("function lastPollFrom(status)", javascript)
         self.assertIn("function renderEventDetails(event)", javascript)
+        self.assertIn('html[data-theme="win95"]', styles)
+        self.assertIn(".panel > h2::after", styles)
         self.assertIn("status.last_poll", javascript)
         self.assertIn("lastPoll.documents", javascript)
         self.assertIn("lastPoll.new_documents", javascript)

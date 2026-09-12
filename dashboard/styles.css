@@ -156,6 +156,36 @@ main {
   gap: 8px;
 }
 
+.theme-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  border: 2px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  padding: 5px 8px;
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 3px 3px 0 var(--line);
+}
+
+.theme-control span {
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.theme-control select {
+  min-width: 128px;
+  border: 1px solid #b9afd7;
+  background: #fffef8;
+  color: var(--ink);
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 13px;
+}
+
 .toolbar a,
 .toolbar button {
   min-height: 34px;
@@ -172,6 +202,7 @@ main {
   box-shadow: 3px 3px 0 var(--line);
 }
 
+.theme-control:focus-within,
 .toolbar a:hover,
 .toolbar button:hover {
   transform: translate(-1px, -1px);
@@ -675,6 +706,736 @@ code {
   font-size: 13px;
 }
 
+html[data-theme="win95"] {
+  color-scheme: light;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  color: #000;
+  background: #008080;
+  --win95-face: #c0c0c0;
+  --win95-light: #fff;
+  --win95-mid: #dfdfdf;
+  --win95-shadow: #808080;
+  --win95-dark: #0a0a0a;
+  --win95-title: #000080;
+  --ink: #000;
+  --muted: #404040;
+  --paper: #c0c0c0;
+  --paper-2: #fff;
+  --line: #000;
+  --blue: #000080;
+  --aqua: #008080;
+  --pink: #800080;
+  --sun: #ffffcc;
+  --lime: #00a000;
+  --lavender: #c0c0c0;
+  --red: #800000;
+  --green: #006000;
+}
+
+html[data-theme="win95"] body {
+  background: #008080;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 12px;
+  padding-bottom: 28px;
+}
+
+html[data-theme="win95"] body::before {
+  content: "";
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 50;
+  height: 28px;
+  background: #c0c0c0;
+  box-shadow:
+    inset 0 1px #fff,
+    inset 0 2px #dfdfdf,
+    inset 0 -1px #404040;
+  pointer-events: none;
+}
+
+html[data-theme="win95"] body::after {
+  content: "Start";
+  position: fixed;
+  bottom: 4px;
+  left: 4px;
+  z-index: 51;
+  height: 21px;
+  background:
+    linear-gradient(90deg, #000 0 2px, transparent 2px 6px, #008000 6px 10px, transparent 10px 14px, #000080 14px 18px, transparent 18px 25px),
+    #c0c0c0;
+  color: #000;
+  padding: 3px 8px 3px 24px;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 15px;
+  box-shadow:
+    inset -1px -1px #0a0a0a,
+    inset 1px 1px #fff,
+    inset -2px -2px #808080,
+    inset 2px 2px #dfdfdf,
+    58px 0 0 #c0c0c0,
+    59px 0 0 #fff,
+    60px 0 0 #808080,
+    61px 0 0 #0a0a0a,
+    62px 0 0 #c0c0c0;
+  pointer-events: none;
+}
+
+html[data-theme="win95"] .app-header {
+  position: static;
+  max-width: none;
+  margin: 6px;
+  padding: 2px;
+  border: 0;
+  background: #c0c0c0;
+  color: #000;
+  box-shadow:
+    inset -1px -1px var(--win95-dark),
+    inset 1px 1px var(--win95-light),
+    inset -2px -2px var(--win95-shadow),
+    inset 2px 2px var(--win95-mid);
+}
+
+html[data-theme="win95"] .header-ribbon {
+  position: relative;
+  margin: 0;
+  min-height: 18px;
+  padding: 2px 56px 2px 3px;
+  border: 0;
+  background: #000080;
+  color: #fff;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 14px;
+}
+
+html[data-theme="win95"] .header-ribbon > span:first-child,
+html[data-theme="win95"] .header-ribbon > span:nth-child(3) {
+  display: none;
+}
+
+html[data-theme="win95"] .header-ribbon::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  width: 48px;
+  height: 14px;
+  background:
+    linear-gradient(#000, #000) 4px 10px / 7px 2px no-repeat,
+    linear-gradient(#000, #000) 21px 3px / 8px 1px no-repeat,
+    linear-gradient(#000, #000) 21px 3px / 1px 8px no-repeat,
+    linear-gradient(#000, #000) 28px 3px / 1px 8px no-repeat,
+    linear-gradient(#000, #000) 21px 10px / 8px 1px no-repeat,
+    linear-gradient(45deg, transparent 42%, #000 42% 58%, transparent 58%) 37px 3px / 8px 8px no-repeat,
+    linear-gradient(-45deg, transparent 42%, #000 42% 58%, transparent 58%) 37px 3px / 8px 8px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 0 0 / 14px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 0 0 / 1px 14px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 13px 1px / 1px 13px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 1px 13px / 13px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 17px 0 / 14px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 17px 0 / 1px 14px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 30px 1px / 1px 13px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 18px 13px / 13px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 34px 0 / 14px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 34px 0 / 1px 14px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 47px 1px / 1px 13px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 35px 13px / 13px 1px no-repeat,
+    linear-gradient(var(--win95-face), var(--win95-face)) 0 0 / 14px 14px no-repeat,
+    linear-gradient(var(--win95-face), var(--win95-face)) 17px 0 / 14px 14px no-repeat,
+    linear-gradient(var(--win95-face), var(--win95-face)) 34px 0 / 14px 14px no-repeat;
+}
+
+html[data-theme="win95"] .title-row {
+  align-items: center;
+  margin: 0;
+  padding: 8px 7px 7px;
+  background: #c0c0c0;
+}
+
+html[data-theme="win95"] h1 {
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-shadow: none;
+}
+
+html[data-theme="win95"] .app-header p {
+  color: #222;
+  font-size: 12px;
+}
+
+html[data-theme="win95"] main {
+  padding: 0 8px 10px;
+}
+
+html[data-theme="win95"] .grid,
+html[data-theme="win95"] .columns,
+html[data-theme="win95"] .side-stack {
+  gap: 10px;
+}
+
+html[data-theme="win95"] .section,
+html[data-theme="win95"] .grid {
+  margin-bottom: 10px;
+}
+
+html[data-theme="win95"] .section {
+  margin-top: 10px;
+}
+
+html[data-theme="win95"] .service-pill,
+html[data-theme="win95"] .toolbar,
+html[data-theme="win95"] .theme-control,
+html[data-theme="win95"] .toolbar a,
+html[data-theme="win95"] .toolbar button,
+html[data-theme="win95"] .panel,
+html[data-theme="win95"] .output-pill,
+html[data-theme="win95"] .detail-toggle,
+html[data-theme="win95"] .poll-trigger,
+html[data-theme="win95"] .state-trigger,
+html[data-theme="win95"] .service-tab,
+html[data-theme="win95"] .log-filter,
+html[data-theme="win95"] .status,
+html[data-theme="win95"] .plugin-pill {
+  border: 0;
+  background: #c0c0c0;
+  color: #000;
+  box-shadow:
+    inset -1px -1px var(--win95-dark),
+    inset 1px 1px var(--win95-light),
+    inset -2px -2px var(--win95-shadow),
+    inset 2px 2px var(--win95-mid);
+}
+
+html[data-theme="win95"] .service-pill:nth-child(2),
+html[data-theme="win95"] .clear-seen,
+html[data-theme="win95"] .plugin-pill.output {
+  background: #c0c0c0;
+  color: #000;
+}
+
+html[data-theme="win95"] .toolbar {
+  margin-bottom: 10px;
+  padding: 5px;
+  background: #c0c0c0;
+}
+
+html[data-theme="win95"] .actions {
+  gap: 6px;
+}
+
+html[data-theme="win95"] .theme-control,
+html[data-theme="win95"] .toolbar a,
+html[data-theme="win95"] .toolbar button,
+html[data-theme="win95"] .detail-toggle,
+html[data-theme="win95"] .poll-trigger,
+html[data-theme="win95"] .state-trigger,
+html[data-theme="win95"] .service-tab,
+html[data-theme="win95"] .log-filter {
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+html[data-theme="win95"] .theme-control span {
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+}
+
+html[data-theme="win95"] .theme-control select {
+  min-height: 21px;
+  border: 0;
+  background: #fff;
+  color: #000;
+  font-size: 11px;
+  box-shadow:
+    inset -1px -1px var(--win95-light),
+    inset 1px 1px var(--win95-shadow),
+    inset -2px -2px var(--win95-mid),
+    inset 2px 2px var(--win95-dark);
+}
+
+html[data-theme="win95"] .panel::after {
+  content: "";
+  top: 3px;
+  right: 3px;
+  width: 48px;
+  height: 14px;
+  border: 0;
+  background:
+    linear-gradient(#000, #000) 4px 10px / 7px 2px no-repeat,
+    linear-gradient(#000, #000) 21px 3px / 8px 1px no-repeat,
+    linear-gradient(#000, #000) 21px 3px / 1px 8px no-repeat,
+    linear-gradient(#000, #000) 28px 3px / 1px 8px no-repeat,
+    linear-gradient(#000, #000) 21px 10px / 8px 1px no-repeat,
+    linear-gradient(45deg, transparent 42%, #000 42% 58%, transparent 58%) 37px 3px / 8px 8px no-repeat,
+    linear-gradient(-45deg, transparent 42%, #000 42% 58%, transparent 58%) 37px 3px / 8px 8px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 0 0 / 14px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 0 0 / 1px 14px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 13px 1px / 1px 13px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 1px 13px / 13px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 17px 0 / 14px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 17px 0 / 1px 14px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 30px 1px / 1px 13px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 18px 13px / 13px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 34px 0 / 14px 1px no-repeat,
+    linear-gradient(var(--win95-light), var(--win95-light)) 34px 0 / 1px 14px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 47px 1px / 1px 13px no-repeat,
+    linear-gradient(var(--win95-dark), var(--win95-dark)) 35px 13px / 13px 1px no-repeat,
+    linear-gradient(var(--win95-face), var(--win95-face)) 0 0 / 14px 14px no-repeat,
+    linear-gradient(var(--win95-face), var(--win95-face)) 17px 0 / 14px 14px no-repeat,
+    linear-gradient(var(--win95-face), var(--win95-face)) 34px 0 / 14px 14px no-repeat;
+}
+
+html[data-theme="win95"] .panel > h2,
+html[data-theme="win95"] .panel-heading,
+html[data-theme="win95"] .panel:nth-child(2n) > h2,
+html[data-theme="win95"] .side-stack .panel:nth-child(2n) > h2 {
+  min-height: 22px;
+  padding: 3px 56px 3px 4px;
+  border: 0;
+  background: #000080;
+  color: #fff;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+html[data-theme="win95"] .panel > :not(h2):not(.panel-heading) {
+  margin: 6px 5px 5px;
+}
+
+html[data-theme="win95"] .metric {
+  margin: 6px 6px 3px;
+  padding: 5px 7px;
+  color: #000;
+  background: #fff;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 21px;
+  text-shadow: none;
+  box-shadow:
+    inset -1px -1px var(--win95-light),
+    inset 1px 1px var(--win95-shadow),
+    inset -2px -2px var(--win95-mid),
+    inset 2px 2px var(--win95-dark);
+}
+
+html[data-theme="win95"] .label {
+  margin: 0 6px 6px;
+  color: #000;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+html[data-theme="win95"] th,
+html[data-theme="win95"] .plugin-label,
+html[data-theme="win95"] .selected-subtitle,
+html[data-theme="win95"] .config-list dt {
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+}
+
+html[data-theme="win95"] table {
+  font-size: 11px;
+  background: #fff;
+  box-shadow:
+    inset -1px -1px var(--win95-light),
+    inset 1px 1px var(--win95-shadow),
+    inset -2px -2px var(--win95-mid),
+    inset 2px 2px var(--win95-dark);
+}
+
+html[data-theme="win95"] th {
+  background: #c0c0c0;
+  color: #000;
+  font-weight: 400;
+  text-transform: none;
+  box-shadow:
+    inset -1px -1px var(--win95-shadow),
+    inset 1px 1px var(--win95-light);
+}
+
+html[data-theme="win95"] th,
+html[data-theme="win95"] td,
+html[data-theme="win95"] .account-detail-row td {
+  border-bottom-color: #808080;
+  padding: 5px 6px;
+}
+
+html[data-theme="win95"] tbody tr:hover {
+  background: #000080;
+  color: #fff;
+}
+
+html[data-theme="win95"] tbody tr:hover code,
+html[data-theme="win95"] tbody tr:hover .output-pill {
+  color: #000;
+}
+
+html[data-theme="win95"] code,
+html[data-theme="win95"] .output-card,
+html[data-theme="win95"] .config-list,
+html[data-theme="win95"] .account-detail-panel,
+html[data-theme="win95"] .live-pill {
+  border: 0;
+  background: #fff;
+  color: #000;
+  box-shadow:
+    inset -1px -1px var(--win95-light),
+    inset 1px 1px var(--win95-shadow),
+    inset -2px -2px var(--win95-mid),
+    inset 2px 2px var(--win95-dark);
+}
+
+html[data-theme="win95"] code,
+html[data-theme="win95"] .output-pill,
+html[data-theme="win95"] .plugin-pill,
+html[data-theme="win95"] .status,
+html[data-theme="win95"] .live-pill {
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+}
+
+html[data-theme="win95"] .output-pill,
+html[data-theme="win95"] .plugin-pill,
+html[data-theme="win95"] .status {
+  padding: 2px 5px;
+}
+
+html[data-theme="win95"] .status.ok,
+html[data-theme="win95"] .ok {
+  color: #006000;
+}
+
+html[data-theme="win95"] .status.error,
+html[data-theme="win95"] .error {
+  color: #800000;
+}
+
+html[data-theme="win95"] .service-tabs,
+html[data-theme="win95"] .log-controls,
+html[data-theme="win95"] .plugin-pills {
+  gap: 5px;
+}
+
+html[data-theme="win95"] .config-list {
+  padding: 7px;
+}
+
+html[data-theme="win95"] .log-line {
+  grid-template-columns: 145px auto auto auto auto minmax(0, 1fr);
+  gap: 6px;
+  border-bottom-color: #808080;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+}
+
+html[data-theme="win95"] .detail-toggle:active,
+html[data-theme="win95"] .detail-toggle.is-selected,
+html[data-theme="win95"] .poll-trigger:active,
+html[data-theme="win95"] .state-trigger:active,
+html[data-theme="win95"] .service-tab:active,
+html[data-theme="win95"] .service-tab.is-selected,
+html[data-theme="win95"] .log-filter:active,
+html[data-theme="win95"] .log-filter.is-selected {
+  background: #d8d8d8;
+  transform: none;
+  box-shadow:
+    inset -1px -1px var(--win95-light),
+    inset 1px 1px var(--win95-dark),
+    inset -2px -2px var(--win95-mid),
+    inset 2px 2px var(--win95-shadow);
+}
+
+html[data-theme="win95"] .theme-control:focus-within,
+html[data-theme="win95"] .toolbar a:hover,
+html[data-theme="win95"] .toolbar button:hover,
+html[data-theme="win95"] .detail-toggle:hover,
+html[data-theme="win95"] .poll-trigger:hover,
+html[data-theme="win95"] .state-trigger:hover,
+html[data-theme="win95"] .service-tab:hover,
+html[data-theme="win95"] .log-filter:hover {
+  transform: none;
+  outline: 1px dotted #000;
+  outline-offset: -4px;
+}
+
+html[data-theme="win95"] .ok,
+html[data-theme="win95"] .running,
+html[data-theme="win95"] .queued,
+html[data-theme="win95"] .waiting,
+html[data-theme="win95"] .error {
+  background: #fff;
+}
+
+html[data-theme="win95"] body {
+  padding-bottom: 0;
+}
+
+html[data-theme="win95"] body::before,
+html[data-theme="win95"] body::after {
+  content: none;
+  display: none;
+}
+
+html[data-theme="win95"] .app-header,
+html[data-theme="win95"] .panel {
+  padding: 3px;
+  background: silver;
+  box-shadow:
+    inset -1px -1px #0a0a0a,
+    inset 1px 1px #dfdfdf,
+    inset -2px -2px grey,
+    inset 2px 2px #fff;
+}
+
+html[data-theme="win95"] .app-header {
+  margin: 8px;
+}
+
+html[data-theme="win95"] main {
+  padding: 0 8px 12px;
+}
+
+html[data-theme="win95"] .toolbar {
+  margin: 0 0 8px;
+  padding: 6px;
+  background: silver;
+  box-shadow:
+    inset -1px -1px #0a0a0a,
+    inset 1px 1px #dfdfdf,
+    inset -2px -2px grey,
+    inset 2px 2px #fff;
+}
+
+html[data-theme="win95"] .header-ribbon,
+html[data-theme="win95"] .panel > h2,
+html[data-theme="win95"] .panel-heading,
+html[data-theme="win95"] .panel:nth-child(2n) > h2,
+html[data-theme="win95"] .side-stack .panel:nth-child(2n) > h2 {
+  box-sizing: border-box;
+  position: relative;
+  min-height: 18px;
+  height: 18px;
+  padding: 3px 56px 3px 3px;
+  background: linear-gradient(90deg, navy, #1084d0);
+  color: #fff;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 12px;
+}
+
+html[data-theme="win95"] .panel::after {
+  content: none;
+  display: none;
+}
+
+html[data-theme="win95"] .panel-heading {
+  height: auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+  padding: 0 0 6px;
+  background: silver;
+  color: #000;
+}
+
+html[data-theme="win95"] .panel-heading > h2 {
+  box-sizing: border-box;
+  position: relative;
+  min-height: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 3px 56px 3px 3px;
+  background: linear-gradient(90deg, navy, #1084d0);
+  color: #fff;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 12px;
+}
+
+html[data-theme="win95"] .panel-heading .log-controls {
+  padding: 0 5px;
+}
+
+html[data-theme="win95"] .header-ribbon::after,
+html[data-theme="win95"] .panel > h2::after,
+html[data-theme="win95"] .panel-heading > h2::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: block;
+  box-sizing: content-box;
+  width: 50px;
+  height: 14px;
+  min-width: 50px;
+  min-height: 14px;
+  max-width: 50px;
+  max-height: 14px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-size: 0;
+  line-height: 0;
+  background: transparent url("data:image/svg+xml,%3Csvg width='50' height='14' viewBox='0 0 50 14' xmlns='http://www.w3.org/2000/svg' shape-rendering='crispEdges'%3E%3Cg fill='silver'%3E%3Crect x='0' y='0' width='16' height='14'/%3E%3Crect x='17' y='0' width='16' height='14'/%3E%3Crect x='34' y='0' width='16' height='14'/%3E%3C/g%3E%3Cg fill='none'%3E%3Cpath d='M0 0h16M0 0v14M17 0h16M17 0v14M34 0h16M34 0v14' stroke='%23fff'/%3E%3Cpath d='M1 1h14M1 1v12M18 1h14M18 1v12M35 1h14M35 1v12' stroke='%23dfdfdf'/%3E%3Cpath d='M15 0v14M0 13h16M32 0v14M17 13h16M49 0v14M34 13h16' stroke='%230a0a0a'/%3E%3Cpath d='M14 1v12M1 12h14M31 1v12M18 12h14M48 1v12M35 12h14' stroke='gray'/%3E%3C/g%3E%3Cg fill='%23000'%3E%3Crect x='5' y='10' width='7' height='2'/%3E%3Cpath d='M21 3h9v9h-9zM22 5v6h7V5z' fill-rule='evenodd'/%3E%3Cpath d='M38 3h2v1h1v1h1v1h1V5h1V4h1V3h2v1h-1v1h-1v1h-1v1h-1v1h1v1h1v1h1v1h-2v-1h-1V9h-1V8h-1v1h-1v1h-1v1h-2v-1h1V9h1V8h1V7h1V6h-1V5h-1V4h-1z'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 50px 14px no-repeat;
+  box-shadow: none;
+  image-rendering: pixelated;
+  pointer-events: none;
+}
+
+html[data-theme="win95"] .title-row {
+  padding: 8px;
+}
+
+html[data-theme="win95"] .panel > :not(h2):not(.panel-heading) {
+  margin: 8px;
+}
+
+html[data-theme="win95"] .theme-control,
+html[data-theme="win95"] .toolbar a,
+html[data-theme="win95"] .toolbar button,
+html[data-theme="win95"] .detail-toggle,
+html[data-theme="win95"] .poll-trigger,
+html[data-theme="win95"] .state-trigger,
+html[data-theme="win95"] .service-tab,
+html[data-theme="win95"] .log-filter,
+html[data-theme="win95"] .service-pill,
+html[data-theme="win95"] .output-pill,
+html[data-theme="win95"] .plugin-pill,
+html[data-theme="win95"] .status {
+  min-height: 23px;
+  min-width: 75px;
+  border: none;
+  border-radius: 0;
+  background: silver;
+  color: #000;
+  padding: 0 12px;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 23px;
+  box-shadow:
+    inset -1px -1px #0a0a0a,
+    inset 1px 1px #fff,
+    inset -2px -2px grey,
+    inset 2px 2px #dfdfdf;
+}
+
+html[data-theme="win95"] .output-pill,
+html[data-theme="win95"] .plugin-pill,
+html[data-theme="win95"] .status,
+html[data-theme="win95"] .service-pill {
+  min-width: 0;
+  line-height: 15px;
+  padding: 4px 6px;
+}
+
+html[data-theme="win95"] .theme-control {
+  gap: 6px;
+  line-height: 15px;
+}
+
+html[data-theme="win95"] .theme-control select {
+  height: 21px;
+  min-height: 21px;
+  border: none;
+  border-radius: 0;
+  background-color: #fff;
+  color: #000;
+  padding: 3px 26px 3px 4px;
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+  box-shadow:
+    inset -1px -1px #fff,
+    inset 1px 1px grey,
+    inset -2px -2px #dfdfdf,
+    inset 2px 2px #0a0a0a;
+}
+
+html[data-theme="win95"] .detail-toggle:active,
+html[data-theme="win95"] .detail-toggle.is-selected,
+html[data-theme="win95"] .poll-trigger:active,
+html[data-theme="win95"] .state-trigger:active,
+html[data-theme="win95"] .service-tab:active,
+html[data-theme="win95"] .service-tab.is-selected,
+html[data-theme="win95"] .log-filter:active,
+html[data-theme="win95"] .log-filter.is-selected,
+html[data-theme="win95"] .toolbar a:active,
+html[data-theme="win95"] .toolbar button:active {
+  background: silver;
+  transform: none;
+  box-shadow:
+    inset -1px -1px #fff,
+    inset 1px 1px #0a0a0a,
+    inset -2px -2px #dfdfdf,
+    inset 2px 2px grey;
+}
+
+html[data-theme="win95"] .metric,
+html[data-theme="win95"] code,
+html[data-theme="win95"] table,
+html[data-theme="win95"] .output-card,
+html[data-theme="win95"] .config-list,
+html[data-theme="win95"] .account-detail-panel,
+html[data-theme="win95"] .live-pill {
+  background: #fff;
+  color: #000;
+  box-shadow:
+    inset -1px -1px #fff,
+    inset 1px 1px grey,
+    inset -2px -2px #dfdfdf,
+    inset 2px 2px #0a0a0a;
+}
+
+html[data-theme="win95"] .metric {
+  margin: 8px 8px 4px;
+  padding: 8px;
+  font-size: 22px;
+  line-height: 1;
+}
+
+html[data-theme="win95"] .label {
+  margin: 0 8px 8px;
+}
+
+html[data-theme="win95"] th {
+  height: 17px;
+  background: silver;
+  color: #000;
+  padding: 0 6px;
+  font-weight: 400;
+  text-transform: none;
+  box-shadow:
+    inset -1px -1px #0a0a0a,
+    inset 1px 1px #fff,
+    inset -2px -2px grey,
+    inset 2px 2px #dfdfdf;
+}
+
+html[data-theme="win95"] td {
+  height: 14px;
+  padding: 2px 6px;
+}
+
+html[data-theme="win95"] .log-line {
+  font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+  font-size: 11px;
+}
+
 @media (max-width: 900px) {
   body {
     background-size: 20px 20px, 18px 18px, 18px 18px, auto;
@@ -712,9 +1473,14 @@ code {
   }
 
   .actions a,
-  .actions button {
+  .actions button,
+  .theme-control {
     flex: 1;
     text-align: center;
+  }
+
+  .theme-control {
+    justify-content: space-between;
   }
 
   .grid,
@@ -839,6 +1605,17 @@ code {
 @media (max-width: 430px) {
   .badge-stack {
     justify-content: flex-start;
+  }
+
+  .theme-control {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 5px;
+  }
+
+  .theme-control select {
+    min-width: 0;
+    width: 100%;
   }
 
   .metric {
