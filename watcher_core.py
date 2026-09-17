@@ -9,6 +9,7 @@ import sys
 import tempfile
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -85,6 +86,35 @@ DATE_FIELD_NAMES = {
 
 class StateError(RuntimeError):
     """The local progress file cannot be read safely."""
+
+
+class PollMode(str, Enum):
+    """Supported polling behaviors."""
+
+    NORMAL = "normal"
+    CHECKPOINT = "checkpoint"
+
+
+def poll_mode(value: str | PollMode | None) -> PollMode:
+    """Normalize a public poll mode value."""
+    if isinstance(value, PollMode):
+        return value
+    text = (value or PollMode.NORMAL.value).strip().lower()
+    aliases = {
+        "normal": PollMode.NORMAL,
+        "poll": PollMode.NORMAL,
+        "checkpoint": PollMode.CHECKPOINT,
+        "mark_seen": PollMode.CHECKPOINT,
+        "mark-seen": PollMode.CHECKPOINT,
+        "seen": PollMode.CHECKPOINT,
+        "empty": PollMode.CHECKPOINT,
+    }
+    try:
+        return aliases[text]
+    except KeyError as error:
+        raise ValueError(
+            f"Unsupported poll mode {value!r}; expected normal or checkpoint."
+        ) from error
 
 
 def utc_now() -> str:
@@ -539,6 +569,7 @@ def update_last_poll_state(
     account: SourceAccountConfig,
     *,
     status: str,
+    mode: PollMode,
     processed_messages: int,
     delivered_documents: list[dict[str, Any]],
     failed_messages: int,
@@ -549,6 +580,7 @@ def update_last_poll_state(
         "account": account.name,
         "source": account.source,
         "status": status,
+        "mode": mode.value,
         "finished_at": finished_at,
         "new_messages": processed_messages,
         "new_documents": len(delivered_documents),
@@ -561,9 +593,11 @@ def run_poll(
     account: SourceAccountConfig,
     source: DocumentSource,
     context: SourceContext | None = None,
+    mode: str | PollMode = PollMode.NORMAL,
 ) -> int:
     """Run one polling pass against a source account."""
     context = context or SourceContext(CliInputBroker())
+    resolved_mode = poll_mode(mode)
     prepare_private_directory(account.runtime_dir)
     state = load_state(account)
     seen = set(state["seen_ids"])
@@ -573,6 +607,7 @@ def run_poll(
             state,
             account,
             status="ok",
+            mode=resolved_mode,
             processed_messages=0,
             delivered_documents=[],
             failed_messages=0,
@@ -580,6 +615,27 @@ def run_poll(
         save_state(account, state)
         print(f"[{account.name}] No new messages.")
         return 0
+
+    if resolved_mode is PollMode.CHECKPOINT:
+        for message in messages:
+            seen.add(message.id)
+        processed = len(messages)
+        state["seen_ids"] = sorted(seen)
+        update_last_poll_state(
+            state,
+            account,
+            status="ok",
+            mode=resolved_mode,
+            processed_messages=processed,
+            delivered_documents=[],
+            failed_messages=0,
+        )
+        save_state(account, state)
+        print(
+            f"[{account.name}] Checkpointed {processed} message(s) as seen "
+            "without downloading documents."
+        )
+        return processed
 
     processed = 0
     delivered_count = 0
@@ -641,6 +697,7 @@ def run_poll(
                 state,
                 account,
                 status="error" if failed_messages else "ok",
+                mode=resolved_mode,
                 processed_messages=processed,
                 delivered_documents=delivered_documents,
                 failed_messages=failed_messages,
@@ -660,14 +717,16 @@ def poll_account(
     account: SourceAccountConfig,
     input_broker: InputBroker | None = None,
     runtime_state: Any | None = None,
+    mode: str | PollMode = PollMode.NORMAL,
 ) -> int:
     """Poll one account with locking and one expired-session refresh."""
     context = SourceContext(input_broker or CliInputBroker(), runtime_state)
+    resolved_mode = poll_mode(mode)
     with exclusive_lock(account.lock_file):
         source = create_source(account.source)
         try:
             try:
-                return run_poll(account, source, context)
+                return run_poll(account, source, context, resolved_mode)
             except SourceSessionExpired:
                 print(
                     f"[{account.name}] Saved session expired; refreshing "
@@ -676,6 +735,6 @@ def poll_account(
                 source.refresh_authentication(account, context)
                 source.close()
                 source = create_source(account.source)
-                return run_poll(account, source, context)
+                return run_poll(account, source, context, resolved_mode)
         finally:
             source.close()

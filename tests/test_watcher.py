@@ -1270,7 +1270,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("const $ = (id) => document.getElementById(id);", javascript)
         self.assertIn("API error:", javascript)
         self.assertIn("async function postJson(url, payload = null)", javascript)
-        self.assertIn("async function triggerPoll(accountName)", javascript)
+        self.assertIn("async function triggerPoll(accountName, mode = \"normal\")", javascript)
         self.assertIn("async function clearSeen(accountName)", javascript)
         self.assertIn("async function unseeDocument(accountName, messageId)", javascript)
         self.assertIn('const THEME_STORAGE_KEY = "documentWatcherTheme"', javascript)
@@ -1298,6 +1298,8 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertIn("lastPoll.documents", javascript)
         self.assertIn("lastPoll.new_documents", javascript)
         self.assertIn('class="state-trigger clear-seen"', javascript)
+        self.assertIn('class="poll-trigger checkpoint-trigger"', javascript)
+        self.assertIn('data-mode="checkpoint"', javascript)
         self.assertIn('title="Clear all seen messages for this source"', javascript)
         self.assertIn('class="state-trigger unsee-document"', javascript)
         self.assertNotIn('fetchJson("/api/documents?limit=20")', javascript)
@@ -1362,8 +1364,9 @@ class WatcherHelpersTest(unittest.TestCase):
 
         self.assertEqual(result["status"], "queued")
         self.assertEqual(result["account"], account.name)
+        self.assertEqual(result["mode"], "normal")
         self.assertEqual(published["topic"], "documents/poll")
-        self.assertEqual(published["payload"], '{"account":"alice"}')
+        self.assertEqual(published["payload"], '{"account":"alice","mode":"normal"}')
         self.assertEqual(published["hostname"], "mqtt.local")
         self.assertEqual(published["port"], 1884)
         self.assertEqual(
@@ -1393,6 +1396,28 @@ class WatcherHelpersTest(unittest.TestCase):
         events = state.recent_events()
         self.assertEqual(events[0]["event"], "trigger.rejected")
         self.assertEqual(events[0]["status"], "error")
+
+    def test_api_mqtt_poll_trigger_can_publish_checkpoint_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            account = fake_source_account(Path(temporary_directory))
+            state = RuntimeState()
+            published: dict[str, object] = {}
+
+            result = api_server.publish_mqtt_poll_trigger(
+                account,
+                state,
+                mode="checkpoint",
+                environ={
+                    "DOCUMENT_RUN_MODE": "watcher",
+                    "DOCUMENT_MQTT_HOST": "mqtt.local",
+                },
+                publisher=lambda **kwargs: published.update(kwargs),
+            )
+
+        self.assertEqual(result["mode"], "checkpoint")
+        self.assertEqual(
+            published["payload"], '{"account":"alice","mode":"checkpoint"}'
+        )
 
     def test_runtime_state_assigns_event_ids_and_recent_events(self) -> None:
         state = RuntimeState(max_events=2)
@@ -1859,6 +1884,35 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(BatchRecordingOutput.result.delivered_documents, 2)
         self.assertEqual(BatchRecordingOutput.result.failed_messages, 0)
 
+    def test_checkpoint_poll_marks_messages_seen_without_outputs_or_downloads(self) -> None:
+        register_output("batch_recording", BatchRecordingOutput)
+        BatchRecordingOutput.events = []
+        BatchRecordingOutput.delivered = []
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            account = fake_source_account(
+                root,
+                (OutputConfig("zipper", "batch_recording"),),
+            )
+
+            with patch("builtins.print"):
+                count = watcher_core.run_poll(
+                    account,
+                    TwoMessageSource(),
+                    mode=watcher_core.PollMode.CHECKPOINT,
+                )
+
+            state = watcher_core.load_state(account)
+
+        self.assertEqual(count, 2)
+        self.assertEqual(state["seen_ids"], ["1", "2"])
+        self.assertEqual(state["last_poll"]["mode"], "checkpoint")
+        self.assertEqual(state["last_poll"]["new_messages"], 2)
+        self.assertEqual(state["last_poll"]["new_documents"], 0)
+        self.assertEqual(state["last_poll"]["documents"], [])
+        self.assertEqual(BatchRecordingOutput.events, [])
+        self.assertEqual(BatchRecordingOutput.delivered, [])
+
     def test_batch_output_end_failure_prevents_checkpoint(self) -> None:
         register_output("batch_failing", BatchFailingOutput)
         BatchFailingOutput.events = []
@@ -1978,6 +2032,11 @@ class WatcherHelpersTest(unittest.TestCase):
             ).account_names,
             ["alice", "bob"],
         )
+        request = mqtt_trigger.parse_trigger_payload(
+            '{"account":"alice","mode":"checkpoint"}'
+        )
+        self.assertEqual(request.account_names, ["alice"])
+        self.assertEqual(request.mode, watcher_core.PollMode.CHECKPOINT)
 
     def test_mqtt_input_payload_accepts_code_shorthand(self) -> None:
         request = mqtt_trigger.parse_input_payload(
@@ -2075,7 +2134,7 @@ class WatcherHelpersTest(unittest.TestCase):
                 state_file=root / "state.json",
                 lock_file=root / ".run.lock",
             )
-            jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
+            jobs: "queue.Queue[mqtt_trigger.PollJob | None]" = queue.Queue()
             broker = PushInputBroker()
             client = FakeMqttStatusClient()
             shutdown_event = threading.Event()
@@ -2096,7 +2155,7 @@ class WatcherHelpersTest(unittest.TestCase):
                 patch("builtins.print"),
             ):
                 worker_thread.start()
-                jobs.put(account)
+                jobs.put(mqtt_trigger.PollJob(account, watcher_core.PollMode.NORMAL))
                 jobs.join()
                 jobs.put(None)
                 jobs.join()
@@ -2108,6 +2167,7 @@ class WatcherHelpersTest(unittest.TestCase):
         )
         self.assertEqual(payloads[-1]["account"], "alice_myguichet")
         self.assertEqual(payloads[-1]["source"], "myguichet")
+        self.assertEqual(payloads[-1]["mode"], "normal")
         self.assertEqual(payloads[-1]["new_messages"], 7)
         self.assertEqual(state.snapshot()["recent_events"][-1]["status"], "ok")
 
@@ -2122,7 +2182,7 @@ class WatcherHelpersTest(unittest.TestCase):
                 state_file=root / "state.json",
                 lock_file=root / ".run.lock",
             )
-            jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
+            jobs: "queue.Queue[mqtt_trigger.PollJob | None]" = queue.Queue()
             broker = PushInputBroker()
             client = FakeMqttStatusClient()
             shutdown_event = threading.Event()
@@ -2147,7 +2207,7 @@ class WatcherHelpersTest(unittest.TestCase):
                 patch("builtins.print"),
             ):
                 worker_thread.start()
-                jobs.put(account)
+                jobs.put(mqtt_trigger.PollJob(account, watcher_core.PollMode.NORMAL))
                 jobs.join()
                 jobs.put(None)
                 jobs.join()
@@ -2157,6 +2217,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["account"], "alice_dkv")
         self.assertEqual(payload["source"], "dkv")
+        self.assertEqual(payload["mode"], "normal")
         self.assertEqual(payload["error_type"], "SourceError")
         self.assertEqual(payload["error_message"], "source unavailable")
         self.assertEqual(state.snapshot()["recent_events"][-1]["status"], "error")
@@ -2211,7 +2272,7 @@ class WatcherHelpersTest(unittest.TestCase):
                 state_file=root / "state.json",
                 lock_file=root / ".run.lock",
             )
-            jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
+            jobs: "queue.Queue[mqtt_trigger.PollJob | None]" = queue.Queue()
             broker = PushInputBroker()
             client = FakeMqttStatusClient()
             shutdown_event = threading.Event()
@@ -2233,7 +2294,7 @@ class WatcherHelpersTest(unittest.TestCase):
                 patch("builtins.print"),
             ):
                 worker_thread.start()
-                jobs.put(account)
+                jobs.put(mqtt_trigger.PollJob(account, watcher_core.PollMode.CHECKPOINT))
                 jobs.join()
                 jobs.put(None)
                 jobs.join()
@@ -2244,6 +2305,7 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(payload["status"], "skipped")
         self.assertEqual(payload["account"], "alice_dkv")
         self.assertEqual(payload["source"], "dkv")
+        self.assertEqual(payload["mode"], "checkpoint")
         self.assertEqual(payload["error_type"], mqtt_trigger.SHUTDOWN_ERROR_TYPE)
         self.assertEqual(state.snapshot()["recent_events"][-1]["status"], "skipped")
 
@@ -2258,7 +2320,7 @@ class WatcherHelpersTest(unittest.TestCase):
                 state_file=root / "state.json",
                 lock_file=root / ".run.lock",
             )
-            jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
+            jobs: "queue.Queue[mqtt_trigger.PollJob | None]" = queue.Queue()
             broker = PushInputBroker()
             shutdown_event = threading.Event()
             worker_state = mqtt_trigger.WorkerState()
@@ -2272,7 +2334,7 @@ class WatcherHelpersTest(unittest.TestCase):
             with patch.object(mqtt_trigger, "poll_account", return_value=7) as mocked:
                 with patch("builtins.print"):
                     worker_thread.start()
-                    jobs.put(account)
+                    jobs.put(mqtt_trigger.PollJob(account, watcher_core.PollMode.CHECKPOINT))
                     jobs.join()
                     jobs.put(None)
                     jobs.join()
@@ -2281,6 +2343,7 @@ class WatcherHelpersTest(unittest.TestCase):
                 account,
                 input_broker=broker,
                 runtime_state=state,
+                mode=watcher_core.PollMode.CHECKPOINT,
             )
 
 

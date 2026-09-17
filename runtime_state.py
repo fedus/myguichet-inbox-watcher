@@ -67,16 +67,23 @@ class RuntimeState:
             self._events.append(item)
             self._condition.notify_all()
 
-    def poll_started(self, account: str, source: str) -> None:
+    def poll_started(self, account: str, source: str, mode: str = "normal") -> None:
         started_at = utc_timestamp()
         with self._condition:
             self._active_polls[account] = {
                 "account": account,
                 "source": source,
+                "mode": mode,
                 "started_at": started_at,
                 "documents": [],
             }
-        self.record_event("poll.started", "running", account=account, source=source)
+        self.record_event(
+            "poll.started",
+            "running",
+            account=account,
+            source=source,
+            details={"mode": mode},
+        )
 
     def document_delivered(
         self,
@@ -111,11 +118,12 @@ class RuntimeState:
         source: str,
         status: str,
         *,
+        mode: str = "normal",
         new_messages: int | None = None,
         error_type: str | None = None,
         error_message: str | None = None,
     ) -> None:
-        details: dict[str, Any] = {}
+        details: dict[str, Any] = {"mode": mode}
         if new_messages is not None:
             details["new_messages"] = new_messages
         if error_type:
@@ -129,6 +137,7 @@ class RuntimeState:
             "account": account,
             "source": source,
             "status": status,
+            "mode": mode,
             "finished_at": utc_timestamp(),
             "new_documents": len(documents),
             "documents": documents,

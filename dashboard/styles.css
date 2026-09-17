@@ -468,10 +468,14 @@ code {
 }
 
 .account-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, max-content));
+  display: flex;
+  flex-wrap: wrap;
   gap: 7px;
   align-items: start;
+}
+
+.checkpoint-trigger {
+  background: #e6fbff;
 }
 
 .clear-seen {

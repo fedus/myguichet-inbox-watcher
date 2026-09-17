@@ -17,7 +17,14 @@ from runtime_state import RuntimeState, runtime_state as default_runtime_state
 from sources import available_source_names
 from sources.base import SourceAccountConfig
 from storage import AlreadyRunning
-from watcher_core import StateError, clear_seen_messages, load_state, unsee_message
+from watcher_core import (
+    PollMode,
+    StateError,
+    clear_seen_messages,
+    load_state,
+    poll_mode,
+    unsee_message,
+)
 
 try:
     from fastapi import FastAPI, HTTPException, Query, Request
@@ -320,10 +327,15 @@ def publish_mqtt_poll_trigger(
     account: SourceAccountConfig,
     state: RuntimeState,
     *,
+    mode: str | PollMode = PollMode.NORMAL,
     environ: Mapping[str, str] | None = None,
     publisher: MqttPublisher | None = None,
 ) -> dict[str, Any]:
     """Publish the regular MQTT poll trigger for one configured account."""
+    try:
+        resolved_mode = poll_mode(mode)
+    except ValueError as error:
+        raise MqttTriggerUnavailable(str(error)) from error
     values = os.environ if environ is None else environ
     service = service_payload(values)
     mqtt = service["mqtt"]
@@ -343,7 +355,7 @@ def publish_mqtt_poll_trigger(
 
     topic = str(mqtt["trigger_topic"])
     payload = json.dumps(
-        {"account": account.name},
+        {"account": account.name, "mode": resolved_mode.value},
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -378,16 +390,17 @@ def publish_mqtt_poll_trigger(
         "queued",
         account=account.name,
         source=account.source,
-        message=f"Published MQTT poll trigger to {topic}.",
-        details={"topic": topic},
+        message=f"Published MQTT {resolved_mode.value} trigger to {topic}.",
+        details={"topic": topic, "mode": resolved_mode.value},
     )
     return {
         "status": "queued",
         "account": account.name,
         "source": account.source,
+        "mode": resolved_mode.value,
         "via": "mqtt",
         "topic": topic,
-        "payload": {"account": account.name},
+        "payload": {"account": account.name, "mode": resolved_mode.value},
     }
 
 
@@ -456,10 +469,13 @@ def create_app(
         return account_payload(account_by_name(account_name))
 
     @app.post("/api/accounts/{account_name}/poll", tags=["runtime"])
-    def trigger_account_poll(account_name: str) -> dict[str, Any]:
+    def trigger_account_poll(
+        account_name: str, payload: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         selected_account = account_by_name(account_name)
+        mode = str((payload or {}).get("mode", PollMode.NORMAL.value))
         try:
-            return publish_mqtt_poll_trigger(selected_account, state)
+            return publish_mqtt_poll_trigger(selected_account, state, mode=mode)
         except MqttTriggerUnavailable as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except MqttTriggerPublishError as error:

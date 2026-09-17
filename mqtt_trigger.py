@@ -23,7 +23,7 @@ from outputs.base import OutputError
 from runtime_state import RuntimeState, runtime_state as default_runtime_state
 from sources.base import SourceAccountConfig, SourceError
 from storage import AlreadyRunning
-from watcher_core import StateError, poll_account
+from watcher_core import PollMode, StateError, poll_account, poll_mode
 
 
 DEFAULT_TOPIC = "documents/poll"
@@ -38,7 +38,16 @@ class PollRequest:
     """One MQTT-triggered poll request."""
 
     account_names: list[str] | None
+    mode: PollMode
     payload: str
+
+
+@dataclass(frozen=True)
+class PollJob:
+    """One resolved account poll queued for a worker."""
+
+    account: SourceAccountConfig
+    mode: PollMode
 
 
 @dataclass(frozen=True)
@@ -107,28 +116,38 @@ def parse_trigger_payload(payload: str) -> PollRequest:
     """Accept empty/all payloads, a plain account name, or a small JSON payload."""
     text = payload.strip()
     if not text or text.lower() in {"all", "*"}:
-        return PollRequest(account_names=None, payload=payload)
+        return PollRequest(account_names=None, mode=PollMode.NORMAL, payload=payload)
 
     try:
         decoded = json.loads(text)
     except json.JSONDecodeError:
-        return PollRequest(account_names=[text], payload=payload)
+        return PollRequest(account_names=[text], mode=PollMode.NORMAL, payload=payload)
 
     if isinstance(decoded, str):
         value = decoded.strip()
         if not value or value.lower() in {"all", "*"}:
-            return PollRequest(account_names=None, payload=payload)
-        return PollRequest(account_names=[value], payload=payload)
+            return PollRequest(
+                account_names=None, mode=PollMode.NORMAL, payload=payload
+            )
+        return PollRequest(
+            account_names=[value], mode=PollMode.NORMAL, payload=payload
+        )
 
     if isinstance(decoded, dict):
+        try:
+            mode = poll_mode(str(decoded.get("mode", PollMode.NORMAL.value)))
+        except ValueError as error:
+            raise ConfigurationError(str(error)) from error
+        if decoded.get("checkpoint") is True:
+            mode = PollMode.CHECKPOINT
         account = decoded.get("account")
         accounts = decoded.get("accounts")
         if isinstance(account, str):
-            return PollRequest(account_names=[account], payload=payload)
+            return PollRequest(account_names=[account], mode=mode, payload=payload)
         if isinstance(accounts, list) and all(
             isinstance(item, str) for item in accounts
         ):
-            return PollRequest(account_names=accounts, payload=payload)
+            return PollRequest(account_names=accounts, mode=mode, payload=payload)
 
     raise ConfigurationError(
         "MQTT payload must be empty, all, an account name, or JSON with account/accounts."
@@ -180,9 +199,14 @@ def resolve_accounts(
 
 
 def describe_poll_request(request: PollRequest) -> str:
+    suffix = (
+        " in checkpoint mode"
+        if request.mode is PollMode.CHECKPOINT
+        else ""
+    )
     if request.account_names is None:
-        return "all configured accounts"
-    return ", ".join(request.account_names)
+        return f"all configured accounts{suffix}"
+    return f"{', '.join(request.account_names)}{suffix}"
 
 
 def utc_timestamp() -> str:
@@ -242,7 +266,7 @@ def input_requested_status_event(challenge: InputChallenge) -> dict[str, object]
 
 def enqueue_poll_request(
     client: object,
-    jobs: "queue.Queue[SourceAccountConfig | None]",
+    jobs: "queue.Queue[PollJob | None]",
     request: PollRequest,
     config_provider: ConfigProvider,
     shutdown_event: threading.Event,
@@ -273,7 +297,10 @@ def enqueue_poll_request(
     runtime_state.record_event(
         "trigger.accepted",
         "ok",
-        details={"accounts": [account.name for account in accounts]},
+        details={
+            "accounts": [account.name for account in accounts],
+            "mode": request.mode.value,
+        },
     )
     for account in accounts:
         if shutdown_event.is_set():
@@ -283,6 +310,7 @@ def enqueue_poll_request(
                 account.name,
                 account.source,
                 "skipped",
+                mode=request.mode.value,
                 error_type=SHUTDOWN_ERROR_TYPE,
                 error_message=message,
             )
@@ -293,17 +321,19 @@ def enqueue_poll_request(
                     "skipped",
                     account=account.name,
                     source=account.source,
+                    mode=request.mode.value,
                     **shutdown_fields(message),
                 ),
             )
             continue
-        jobs.put(account)
+        jobs.put(PollJob(account, request.mode))
         print(f"[{account.name}] Poll queued.")
         runtime_state.record_event(
             "poll.queued",
             "queued",
             account=account.name,
             source=account.source,
+            details={"mode": request.mode.value},
         )
         publish_status(
             client,
@@ -312,23 +342,27 @@ def enqueue_poll_request(
                 "queued",
                 account=account.name,
                 source=account.source,
+                mode=request.mode.value,
             ),
         )
 
 
 def worker(
     client: object,
-    jobs: "queue.Queue[SourceAccountConfig | None]",
+    jobs: "queue.Queue[PollJob | None]",
     input_broker: PushInputBroker,
     shutdown_event: threading.Event,
     worker_state: WorkerState,
     runtime_state: RuntimeState,
 ) -> None:
     while True:
-        account = jobs.get()
+        job = jobs.get()
+        account: SourceAccountConfig | None = None
         try:
-            if account is None:
+            if job is None:
                 return
+            account = job.account
+            mode = job.mode
 
             if shutdown_event.is_set():
                 message = "Runner is shutting down before poll started."
@@ -337,6 +371,7 @@ def worker(
                     account.name,
                     account.source,
                     "skipped",
+                    mode=mode.value,
                     error_type=SHUTDOWN_ERROR_TYPE,
                     error_message=message,
                 )
@@ -347,14 +382,15 @@ def worker(
                         "skipped",
                         account=account.name,
                         source=account.source,
+                        mode=mode.value,
                         **shutdown_fields(message),
                     ),
                 )
                 continue
 
             worker_state.start(account)
-            print(f"[{account.name}] Poll started.")
-            runtime_state.poll_started(account.name, account.source)
+            print(f"[{account.name}] Poll started ({mode.value}).")
+            runtime_state.poll_started(account.name, account.source, mode.value)
             publish_status(
                 client,
                 status_event(
@@ -362,6 +398,7 @@ def worker(
                     "running",
                     account=account.name,
                     source=account.source,
+                    mode=mode.value,
                 ),
             )
             try:
@@ -369,6 +406,7 @@ def worker(
                     account,
                     input_broker=input_broker,
                     runtime_state=runtime_state,
+                    mode=mode,
                 )
             except AlreadyRunning as error:
                 print(f"[{account.name}] {error}")
@@ -376,6 +414,7 @@ def worker(
                     account.name,
                     account.source,
                     "skipped",
+                    mode=mode.value,
                     error_type=type(error).__name__,
                     error_message=str(error),
                 )
@@ -384,6 +423,7 @@ def worker(
                     "skipped",
                     account=account.name,
                     source=account.source,
+                    mode=mode.value,
                     **error_fields(error),
                 )
             except (
@@ -399,6 +439,7 @@ def worker(
                     account.name,
                     account.source,
                     "error",
+                    mode=mode.value,
                     error_type=type(error).__name__,
                     error_message=str(error),
                 )
@@ -407,6 +448,7 @@ def worker(
                     "error",
                     account=account.name,
                     source=account.source,
+                    mode=mode.value,
                     **error_fields(error),
                 )
             except Exception as error:
@@ -415,6 +457,7 @@ def worker(
                     account.name,
                     account.source,
                     "error",
+                    mode=mode.value,
                     error_type=type(error).__name__,
                     error_message=str(error),
                 )
@@ -423,6 +466,7 @@ def worker(
                     "error",
                     account=account.name,
                     source=account.source,
+                    mode=mode.value,
                     **error_fields(error),
                 )
             else:
@@ -431,6 +475,7 @@ def worker(
                     account.name,
                     account.source,
                     "ok",
+                    mode=mode.value,
                     new_messages=count,
                 )
                 event = status_event(
@@ -438,6 +483,7 @@ def worker(
                     "ok",
                     account=account.name,
                     source=account.source,
+                    mode=mode.value,
                     new_messages=count,
                 )
             publish_status(client, event)
@@ -488,7 +534,7 @@ def request_shutdown(
 
 def wait_for_workers(
     client: object,
-    jobs: "queue.Queue[SourceAccountConfig | None]",
+    jobs: "queue.Queue[PollJob | None]",
     workers: list[threading.Thread],
     worker_state: WorkerState,
     runtime_state: RuntimeState,
@@ -588,7 +634,7 @@ def main(
                 username, password or None
             )
 
-        jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
+        jobs: "queue.Queue[PollJob | None]" = queue.Queue()
         input_broker = PushInputBroker(
             mqtt_input_ttl_seconds(),
             runtime_state=state,

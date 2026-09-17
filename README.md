@@ -328,6 +328,17 @@ Poll one account:
 .venv/bin/python document_watcher.py --account alice_myguichet
 ```
 
+Create a checkpoint without downloading documents:
+
+```sh
+.venv/bin/python document_watcher.py --account alice_myguichet --checkpoint
+```
+
+Checkpoint mode asks the source for currently unseen messages and records those
+message IDs as seen, but it does not list, download, or deliver documents. Use
+it after first deployment if you want future runs to fetch only documents that
+arrive after the checkpoint.
+
 The watcher:
 
 1. Asks the source plugin for unseen messages.
@@ -385,6 +396,8 @@ Accepted trigger payloads:
 - `alice_myguichet` - poll one configured account.
 - `{"account":"alice_myguichet"}` - poll one account.
 - `{"accounts":["alice_myguichet","bob_other"]}` - poll selected accounts.
+- `{"account":"alice_myguichet","mode":"checkpoint"}` - mark currently unseen
+  messages for one account as seen without downloading documents.
 
 Sources that need external input, such as an OTP, use the same generic input
 broker as the CLI. With MQTT, publish the answer directly to
@@ -425,6 +438,7 @@ publishing themselves. A successful account poll ends with:
   "timestamp": "2026-09-05T12:00:00Z",
   "account": "alice_dkv",
   "source": "dkv",
+  "mode": "normal",
   "new_messages": 3
 }
 ```

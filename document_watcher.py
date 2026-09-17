@@ -16,7 +16,7 @@ from outputs.base import OutputError
 from runtime_state import runtime_state
 from sources.base import SourceError
 from storage import AlreadyRunning
-from watcher_core import StateError, poll_account
+from watcher_core import PollMode, StateError, poll_account
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -26,6 +26,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--account",
         help="Poll one configured account. Defaults to all configured accounts.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        action="store_true",
+        help=(
+            "Mark currently unseen messages as seen without downloading or "
+            "delivering documents."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -71,18 +79,22 @@ def main(
             else provider.get_source_accounts()
         )
         previous_sigterm, previous_sigint = install_shutdown_handlers(shutdown_event)
+        mode = PollMode.CHECKPOINT if args.checkpoint else PollMode.NORMAL
         for account in accounts:
             if shutdown_event.is_set():
                 print(f"[{account.name}] Skipped because shutdown was requested.")
                 break
             try:
-                runtime_state.poll_started(account.name, account.source)
-                count = poll_account(account, runtime_state=runtime_state)
+                runtime_state.poll_started(account.name, account.source, mode.value)
+                count = poll_account(
+                    account, runtime_state=runtime_state, mode=mode
+                )
                 total_messages += count
                 runtime_state.poll_finished(
                     account.name,
                     account.source,
                     "ok",
+                    mode=mode.value,
                     new_messages=count,
                 )
             except AlreadyRunning as error:
@@ -91,6 +103,7 @@ def main(
                     account.name,
                     account.source,
                     "skipped",
+                    mode=mode.value,
                     error_type=type(error).__name__,
                     error_message=str(error),
                 )
@@ -107,6 +120,7 @@ def main(
                     account.name,
                     account.source,
                     "error",
+                    mode=mode.value,
                     error_type=type(error).__name__,
                     error_message=str(error),
                 )
@@ -117,6 +131,7 @@ def main(
                     account.name,
                     account.source,
                     "error",
+                    mode=mode.value,
                     error_type=type(error).__name__,
                     error_message=str(error),
                 )

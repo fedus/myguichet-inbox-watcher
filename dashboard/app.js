@@ -172,10 +172,15 @@ function renderAccounts(accounts) {
         .map(
           (account) => {
             const pollPending = pendingPolls.has(account.name);
+            const checkpointPending = pendingPolls.has(
+              `${account.name}:checkpoint`
+            );
+            const anyPollPending = pollPending || checkpointPending;
             const clearPending = pendingStateActions.has(
               `clear:${account.name}`
             );
             const pollLabel = pollPending ? "Sending" : "Poll";
+            const checkpointLabel = checkpointPending ? "Sending" : "Checkpoint";
             const clearLabel = clearPending ? "Clearing" : "Clear";
             return `
             <tr><td data-label="Account"><code>${html(
@@ -191,8 +196,14 @@ function renderAccounts(accounts) {
             )}</td><td data-label="Actions"><div class="account-actions"><button type="button" class="poll-trigger" data-account="${html(
               account.name
             )}" ${
-              mqttRunning && !pollPending ? "" : "disabled"
-            }>${html(pollLabel)}</button><button type="button" class="state-trigger clear-seen" data-account="${html(
+              mqttRunning && !anyPollPending ? "" : "disabled"
+            }>${html(pollLabel)}</button><button type="button" class="poll-trigger checkpoint-trigger" data-account="${html(
+              account.name
+            )}" title="Mark all currently unseen source messages as seen without downloading documents" ${
+              mqttRunning && !anyPollPending ? "" : "disabled"
+            } data-mode="checkpoint">${html(
+              checkpointLabel
+            )}</button><button type="button" class="state-trigger clear-seen" data-account="${html(
               account.name
             )}" title="Clear all seen messages for this source" ${
               clearPending ? "disabled" : ""
@@ -398,20 +409,30 @@ function renderPlugins(plugins) {
   `;
 }
 
-async function triggerPoll(accountName) {
-  pendingPolls.add(accountName);
+async function triggerPoll(accountName, mode = "normal") {
+  const key = mode === "normal" ? accountName : `${accountName}:${mode}`;
+  if (
+    mode === "checkpoint" &&
+    !window.confirm(
+      `Checkpoint ${accountName}? This marks currently unseen messages as seen without downloading their documents.`
+    )
+  ) {
+    return;
+  }
+  pendingPolls.add(key);
   renderAccounts(latestAccounts);
   try {
     const result = await postJson(
-      `/api/accounts/${encodeURIComponent(accountName)}/poll`
+      `/api/accounts/${encodeURIComponent(accountName)}/poll`,
+      mode === "normal" ? null : { mode }
     );
-    $("updated").textContent = `Poll trigger published for ${result.account}`;
+    $("updated").textContent = `${result.mode} trigger published for ${result.account}`;
     await loadData();
   } catch (error) {
     $("updated").textContent = `Trigger failed: ${error.message}`;
     await loadData();
   } finally {
-    pendingPolls.delete(accountName);
+    pendingPolls.delete(key);
     renderAccounts(latestAccounts);
   }
 }
@@ -525,7 +546,7 @@ document.addEventListener("click", (event) => {
   if (target.classList.contains("poll-trigger")) {
     const account = target.dataset.account;
     if (account && !target.disabled) {
-      triggerPoll(account);
+      triggerPoll(account, target.dataset.mode || "normal");
     }
     return;
   }
