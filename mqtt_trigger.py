@@ -18,7 +18,7 @@ from config import (
     ConfigurationError,
     EnvConfigProvider,
 )
-from input_broker import InputError, PushInputBroker
+from input_broker import InputChallenge, InputError, PushInputBroker
 from outputs.base import OutputError
 from runtime_state import RuntimeState, runtime_state as default_runtime_state
 from sources.base import SourceAccountConfig, SourceError
@@ -223,6 +223,21 @@ def publish_status(client: object, event: Mapping[str, object]) -> None:
     if topic:
         payload = json.dumps(dict(event), sort_keys=True, separators=(",", ":"))
         client.publish(topic, payload)  # type: ignore[attr-defined]
+
+
+def input_requested_status_event(challenge: InputChallenge) -> dict[str, object]:
+    """Return the MQTT status event for a newly opened input challenge."""
+    return status_event(
+        "input.requested",
+        "waiting",
+        account=challenge.account_name,
+        source=challenge.source,
+        kind=challenge.kind,
+        prompt=challenge.prompt,
+        fields=list(challenge.fields),
+        timeout_seconds=challenge.timeout_seconds,
+        challenge_id=challenge.id,
+    )
 
 
 def enqueue_poll_request(
@@ -574,7 +589,13 @@ def main(
             )
 
         jobs: "queue.Queue[SourceAccountConfig | None]" = queue.Queue()
-        input_broker = PushInputBroker(mqtt_input_ttl_seconds(), runtime_state=state)
+        input_broker = PushInputBroker(
+            mqtt_input_ttl_seconds(),
+            runtime_state=state,
+            on_input_requested=lambda challenge: publish_status(
+                client, input_requested_status_event(challenge)
+            ),
+        )
         shutdown_event = threading.Event()
         worker_state = WorkerState()
         workers: list[threading.Thread] = []

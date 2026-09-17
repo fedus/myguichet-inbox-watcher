@@ -1003,6 +1003,38 @@ class WatcherHelpersTest(unittest.TestCase):
 
         self.assertEqual(answer, {"answer": "blue", "device": "phone"})
 
+    def test_push_input_broker_notifies_when_input_is_requested(self) -> None:
+        requested: "queue.Queue[InputChallenge]" = queue.Queue()
+        broker = PushInputBroker(
+            early_answer_ttl_seconds=10,
+            on_input_requested=requested.put,
+        )
+
+        def wait_for_input() -> None:
+            broker.request_input(
+                InputChallenge(
+                    account_name="alice_dkv",
+                    source="dkv",
+                    kind="otp",
+                    prompt="Enter the SMS code",
+                    fields=("code",),
+                    timeout_seconds=2,
+                    id="challenge-1",
+                )
+            )
+
+        with patch("builtins.print"):
+            thread = threading.Thread(target=wait_for_input)
+            thread.start()
+            challenge = requested.get(timeout=1)
+            broker.provide("alice_dkv", {"code": "123456"})
+            thread.join(timeout=2)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(challenge.account_name, "alice_dkv")
+        self.assertEqual(challenge.source, "dkv")
+        self.assertEqual(challenge.id, "challenge-1")
+
     def test_push_input_broker_rejects_answers_missing_requested_fields(self) -> None:
         broker = PushInputBroker(early_answer_ttl_seconds=10)
         with patch("builtins.print"):
@@ -2008,6 +2040,29 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(decoded["account"], "fede_dkv")
         self.assertEqual(decoded["source"], "dkv")
         self.assertEqual(decoded["new_messages"], 3)
+
+    def test_mqtt_input_requested_status_event_is_generic(self) -> None:
+        event = mqtt_trigger.input_requested_status_event(
+            InputChallenge(
+                account_name="alice_dkv",
+                source="dkv",
+                kind="otp",
+                prompt="Enter the SMS code",
+                fields=("code",),
+                timeout_seconds=300,
+                id="challenge-1",
+            )
+        )
+
+        self.assertEqual(event["event"], "input.requested")
+        self.assertEqual(event["status"], "waiting")
+        self.assertEqual(event["account"], "alice_dkv")
+        self.assertEqual(event["source"], "dkv")
+        self.assertEqual(event["kind"], "otp")
+        self.assertEqual(event["prompt"], "Enter the SMS code")
+        self.assertEqual(event["fields"], ["code"])
+        self.assertEqual(event["timeout_seconds"], 300)
+        self.assertEqual(event["challenge_id"], "challenge-1")
 
     def test_mqtt_worker_publishes_json_poll_success_status(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

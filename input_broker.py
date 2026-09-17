@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, Protocol
 from uuid import uuid4
 
 from runtime_state import RuntimeState
@@ -99,9 +99,11 @@ class PushInputBroker:
         self,
         early_answer_ttl_seconds: int = 300,
         runtime_state: RuntimeState | None = None,
+        on_input_requested: Callable[[InputChallenge], None] | None = None,
     ) -> None:
         self.early_answer_ttl_seconds = early_answer_ttl_seconds
         self.runtime_state = runtime_state
+        self.on_input_requested = on_input_requested
         self._condition = threading.Condition()
         self._answers: dict[str, tuple[float, dict[str, str]]] = {}
         self._waiting: dict[str, InputChallenge] = {}
@@ -198,6 +200,8 @@ class PushInputBroker:
                     challenge.timeout_seconds,
                     challenge.id,
                 )
+            if self.on_input_requested is not None:
+                self.on_input_requested(challenge)
             try:
                 while True:
                     if self._closed_reason is not None:

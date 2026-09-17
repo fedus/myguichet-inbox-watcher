@@ -431,7 +431,24 @@ publishing themselves. A successful account poll ends with:
 
 Errors use the same shape with `"status":"error"` plus `error_type` and
 `error_message`. The runner also emits `poll.queued`, `poll.started`,
-`input.accepted`, and rejected-trigger/input events.
+`input.accepted`, and rejected-trigger/input events. When a source opens an
+external-input challenge, the runner emits:
+
+```json
+{
+  "schema": "document_watcher.status.v1",
+  "event": "input.requested",
+  "status": "waiting",
+  "timestamp": "2026-09-05T12:01:00Z",
+  "account": "alice_dkv",
+  "source": "dkv",
+  "kind": "otp",
+  "prompt": "Enter the SMS one-time code",
+  "fields": ["code"],
+  "timeout_seconds": 300,
+  "challenge_id": "..."
+}
+```
 
 In Docker, set `DOCUMENT_RUN_MODE=mqtt` in `.env` or before `docker compose up`
 to run the MQTT subscriber instead of a one-shot poll.
