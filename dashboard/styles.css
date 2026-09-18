@@ -316,37 +316,37 @@ table {
 
 .accounts-table th:nth-child(1),
 .accounts-table td:nth-child(1) {
-  width: 22%;
+  width: 18%;
 }
 
 .accounts-table th:nth-child(2),
 .accounts-table td:nth-child(2) {
-  width: 12%;
+  width: 10%;
 }
 
 .accounts-table th:nth-child(3),
 .accounts-table td:nth-child(3) {
-  width: 22%;
+  width: 16%;
 }
 
 .accounts-table th:nth-child(4),
 .accounts-table td:nth-child(4) {
-  width: 18%;
+  width: 14%;
 }
 
 .accounts-table th:nth-child(5),
 .accounts-table td:nth-child(5) {
-  width: 7%;
+  width: 6%;
 }
 
 .accounts-table th:nth-child(6),
 .accounts-table td:nth-child(6) {
-  width: 16%;
+  width: 28%;
 }
 
 .accounts-table th:nth-child(7),
 .accounts-table td:nth-child(7) {
-  width: 7%;
+  width: 8%;
 }
 
 .documents-table th:nth-child(1),
@@ -470,7 +470,7 @@ code {
 .account-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
+  gap: 5px;
   align-items: start;
 }
 
@@ -2317,7 +2317,7 @@ html[data-theme="cyber"] .live-pill.is-live {
 
   .app-header {
     position: static;
-    padding: 12px;
+    padding: 10px 12px;
   }
 
   .header-ribbon {
@@ -2334,12 +2334,15 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   main {
-    padding: 14px;
+    padding: 10px;
   }
 
   .toolbar {
     align-items: stretch;
     flex-direction: column;
+    gap: 9px;
+    margin-bottom: 10px;
+    padding: 8px;
   }
 
   .actions {
@@ -2362,9 +2365,22 @@ html[data-theme="cyber"] .live-pill.is-live {
     grid-template-columns: 1fr;
   }
 
-  .grid,
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
   .side-stack {
-    gap: 12px;
+    gap: 10px;
+  }
+
+  .columns {
+    gap: 10px;
+  }
+
+  .section {
+    margin-top: 10px;
   }
 
   .panel {
@@ -2373,7 +2389,7 @@ html[data-theme="cyber"] .live-pill.is-live {
 
   .panel > h2,
   .panel-heading {
-    padding: 9px 34px 9px 10px;
+    padding: 7px 30px 7px 9px;
   }
 
   .panel-heading {
@@ -2386,7 +2402,17 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   .panel > :not(h2):not(.panel-heading) {
-    margin: 12px;
+    margin: 8px;
+  }
+
+  .metric {
+    margin: 9px 10px 1px;
+    font-size: 30px;
+  }
+
+  .label {
+    margin: 0 10px 9px;
+    font-size: 12px;
   }
 
   table,
@@ -2407,21 +2433,27 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   tbody tr {
-    padding: 8px 0;
-    border-bottom: 1px dashed #b9afd7;
+    display: block;
+    margin-bottom: 7px;
+    padding: 4px 7px;
+    border: 1px solid #d8d1eb;
+    border-left: 4px solid var(--blue);
+    background: rgba(255, 255, 255, .55);
   }
 
   tbody tr:last-child {
-    border-bottom: 0;
+    margin-bottom: 0;
   }
 
   td {
     display: grid;
-    grid-template-columns: 94px minmax(0, 1fr);
-    gap: 10px;
+    grid-template-columns: minmax(74px, 32%) minmax(0, 1fr);
+    gap: 6px;
     width: auto;
     border-bottom: 0;
-    padding: 6px 0;
+    padding: 3px 0;
+    font-size: 13px;
+    line-height: 1.25;
   }
 
   .accounts-table td,
@@ -2430,12 +2462,137 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   .account-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
   }
 
   .account-actions .poll-trigger,
   .account-actions .state-trigger {
-    width: 100%;
+    flex: 1 1 86px;
+    min-width: 0;
+  }
+
+  .accounts-table tbody tr:not(.account-detail-row) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(70px, auto);
+    column-gap: 8px;
+    row-gap: 2px;
+    align-items: start;
+  }
+
+  .accounts-table tbody tr:not(.account-detail-row) td {
+    display: block;
+    padding: 2px 0;
+  }
+
+  .accounts-table tbody tr:not(.account-detail-row) td::before {
+    display: block;
+    margin-bottom: 1px;
+  }
+
+  .accounts-table td[data-label="Account"] {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .accounts-table td[data-label="Seen"] {
+    grid-column: 2;
+    grid-row: 1;
+    text-align: right;
+  }
+
+  .accounts-table td[data-label="Source"] {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .accounts-table td[data-label="Outputs"] {
+    grid-column: 2;
+    grid-row: 2;
+    text-align: right;
+  }
+
+  .accounts-table td[data-label="Last Run"] {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .accounts-table td[data-label="Actions"] {
+    grid-column: 1;
+    grid-row: 4;
+  }
+
+  .accounts-table td[data-label="Details"] {
+    grid-column: 2;
+    grid-row: 4;
+    align-self: end;
+  }
+
+  .accounts-table td[data-label="Actions"]::before,
+  .accounts-table td[data-label="Details"]::before {
+    content: none;
+  }
+
+  .accounts-table .account-actions {
+    gap: 4px;
+  }
+
+  .accounts-table .account-actions .poll-trigger,
+  .accounts-table .account-actions .state-trigger,
+  .accounts-table .detail-toggle {
+    flex: 0 0 auto;
+    min-height: 25px;
+    padding: 3px 6px;
+    font-size: 12px;
+  }
+
+  .documents-table tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    column-gap: 8px;
+    row-gap: 3px;
+    align-items: center;
+  }
+
+  .documents-table tbody tr td {
+    display: block;
+    padding: 1px 0;
+  }
+
+  .documents-table tbody tr td::before {
+    display: inline;
+    margin-right: 5px;
+  }
+
+  .documents-table td[data-label="File"] {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    font-weight: 700;
+  }
+
+  .documents-table td[data-label="Account"] {
+    grid-column: 1;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  .documents-table td[data-label="Size"] {
+    grid-column: 2;
+    grid-row: 2;
+    white-space: nowrap;
+  }
+
+  .documents-table td[data-label="Action"] {
+    grid-column: 3;
+    grid-row: 2;
+    white-space: nowrap;
+  }
+
+  .documents-table .unsee-document {
+    min-height: 24px;
+    padding: 3px 6px;
+    font-size: 12px;
   }
 
   .account-detail-row td {
@@ -2449,7 +2606,8 @@ html[data-theme="cyber"] .live-pill.is-live {
 
   .account-detail-panel {
     grid-template-columns: 1fr;
-    padding: 12px;
+    padding: 8px;
+    gap: 8px;
   }
 
   .output-card-grid {
@@ -2460,9 +2618,52 @@ html[data-theme="cyber"] .live-pill.is-live {
     content: attr(data-label);
     color: var(--muted);
     font-family: "Courier New", Courier, monospace;
-    font-size: 12px;
+    font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
+  }
+
+  code {
+    padding: 1px 4px;
+  }
+
+  .output-pill,
+  .plugin-pill {
+    border-width: 1px;
+    padding: 3px 6px;
+    font-size: 12px;
+    box-shadow: none;
+  }
+
+  .output-pill {
+    margin: 0 3px 3px 0;
+  }
+
+  .plugin-list {
+    gap: 8px;
+  }
+
+  .plugin-list > div {
+    border: 1px solid #d8d1eb;
+    border-left: 4px solid var(--aqua);
+    background: rgba(255, 255, 255, .52);
+    padding: 6px;
+  }
+
+  .plugin-label {
+    margin-bottom: 4px;
+    font-size: 10px;
+  }
+
+  .plugin-pills {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .plugin-pill {
+    display: block;
+    overflow-wrap: anywhere;
   }
 
   .config-list div {
@@ -2504,11 +2705,12 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   .metric {
-    font-size: 34px;
+    font-size: 28px;
   }
 
   td {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(66px, 30%) minmax(0, 1fr);
+    gap: 5px;
   }
 }
 
@@ -2534,7 +2736,7 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   html[data-theme="modern"] main {
-    padding: 16px;
+    padding: 10px;
   }
 
   html[data-theme="modern"] .toolbar,
@@ -2546,7 +2748,7 @@ html[data-theme="cyber"] .live-pill.is-live {
 
   html[data-theme="modern"] .panel > h2,
   html[data-theme="modern"] .panel-heading {
-    padding: 13px 14px;
+    padding: 8px 10px;
   }
 
   html[data-theme="modern"] .log-controls {
@@ -2571,6 +2773,18 @@ html[data-theme="cyber"] .live-pill.is-live {
     letter-spacing: 0;
   }
 
+  html[data-theme="modern"] tbody tr {
+    border-color: rgba(148, 163, 184, .22);
+    border-left-color: #38bdf8;
+    background: rgba(15, 23, 42, .72);
+  }
+
+  html[data-theme="modern"] .plugin-list > div {
+    border-color: rgba(148, 163, 184, .22);
+    border-left-color: #2dd4bf;
+    background: rgba(15, 23, 42, .68);
+  }
+
   html[data-theme="cyber"] .app-header {
     padding: 20px 16px 18px;
   }
@@ -2584,7 +2798,7 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   html[data-theme="cyber"] main {
-    padding: 14px;
+    padding: 10px;
   }
 
   html[data-theme="cyber"] .toolbar,
@@ -2596,7 +2810,7 @@ html[data-theme="cyber"] .live-pill.is-live {
 
   html[data-theme="cyber"] .panel > h2,
   html[data-theme="cyber"] .panel-heading {
-    padding: 11px 12px;
+    padding: 8px 10px;
   }
 
   html[data-theme="cyber"] td,
@@ -2612,6 +2826,18 @@ html[data-theme="cyber"] .live-pill.is-live {
     font-family: inherit;
     font-size: 11px;
     text-transform: lowercase;
+  }
+
+  html[data-theme="cyber"] tbody tr {
+    border-color: rgba(57, 255, 136, .18);
+    border-left-color: #39ff88;
+    background: rgba(2, 5, 4, .64);
+  }
+
+  html[data-theme="cyber"] .plugin-list > div {
+    border-color: rgba(57, 255, 136, .18);
+    border-left-color: #67e8f9;
+    background: rgba(2, 5, 4, .58);
   }
 }
 
@@ -2638,7 +2864,7 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   html[data-theme="modern"] .metric {
-    font-size: 34px;
+    font-size: 28px;
   }
 
   html[data-theme="cyber"] h1 {
@@ -2657,7 +2883,7 @@ html[data-theme="cyber"] .live-pill.is-live {
   }
 
   html[data-theme="cyber"] .metric {
-    font-size: 31px;
+    font-size: 28px;
   }
 }
 
@@ -2941,16 +3167,28 @@ html[data-theme="cli"] .waiting {
     font-size: 24px;
   }
 
+  html[data-theme="cli"] tbody tr {
+    border-color: #1f6f4a;
+    border-left-color: #67e8f9;
+    background: #050505;
+  }
+
+  html[data-theme="cli"] .plugin-list > div {
+    border-color: #1f6f4a;
+    border-left-color: #67e8f9;
+    background: #050505;
+  }
+
   html[data-theme="win95"] td,
   html[data-theme="win95"] .account-detail-row td {
     height: auto;
     min-height: 0;
-    padding: 5px 6px;
+    padding: 3px 4px;
   }
 
   html[data-theme="win95"] tbody tr {
     height: auto;
-    padding: 7px 0;
+    padding: 4px 6px;
   }
 
   html[data-theme="win95"] .account-actions {
