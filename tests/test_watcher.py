@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 from contextlib import nullcontext
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -45,6 +46,9 @@ from sources.dkv import (  # noqa: E402
     documents_from_refund_detail,
 )
 from sources.dkv.client import DkvClient  # noqa: E402
+from sources.foyer import FoyerDocumentSource  # noqa: E402
+from sources.foyer.config import foyer_account_from_source  # noqa: E402
+from sources.foyer.source import collect_foyer_documents  # noqa: E402
 from sources.myguichet import REQUESTS_PER_PAGE, collect_unseen_communications  # noqa: E402
 from sources.myguichet import login as myguichet_login  # noqa: E402
 from sources.myguichet.config import myguichet_account_from_source  # noqa: E402
@@ -167,6 +171,68 @@ class FakeProSyndicClient:
 
     def download_document(self, document_id: str) -> FakeResponse:
         self.downloaded_documents.append(document_id)
+        return FakeResponse([b"%PDF-1.4\n"])
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeFoyerClient:
+    def __init__(
+        self, pages: dict[tuple[str, int], dict[str, object]] | None = None
+    ) -> None:
+        self.pages = pages or {}
+        self.requested_pages: list[tuple[str, int, dict[str, str | int]]] = []
+        self.logged_in: list[tuple[str, str]] = []
+        self.refreshed_tokens: list[str] = []
+        self.access_token = ""
+        self.downloaded_urls: list[str] = []
+        self.closed = False
+
+    def set_access_token(self, access_token: str) -> None:
+        self.access_token = access_token
+
+    def login(self, username: str, password: str) -> dict[str, object]:
+        self.logged_in.append((username, password))
+        return {
+            "access_token": "foyer-access-token",
+            "refresh_token": "foyer-refresh-token",
+            "expires_in": 300,
+        }
+
+    def refresh_access_token(self, refresh_token: str) -> dict[str, object]:
+        self.refreshed_tokens.append(refresh_token)
+        return {
+            "access_token": "foyer-refreshed-token",
+            "refresh_token": "foyer-refresh-token",
+            "expires_in": 300,
+        }
+
+    def user_profile(self) -> dict[str, object]:
+        return {"meta": {"number": 885719}, "sub": "cli:885719"}
+
+    def list_json(
+        self, path: str, params: dict[str, str | int]
+    ) -> dict[str, object]:
+        page = int(params.get("page[offset]", params.get("page[number]", 0)))
+        self.requested_pages.append((path, page, dict(params)))
+        if (path, page) in self.pages:
+            return self.pages[(path, page)]
+        if "page[number]" in params:
+            return {"data": [], "meta": {"totalPages": 0}}
+        return {
+            "data": [],
+            "meta": {
+                "totalRecords": 0,
+                "page": {
+                    "offset": page,
+                    "limit": int(params.get("page[limit]", 50)),
+                },
+            },
+        }
+
+    def download_url(self, url: str) -> FakeResponse:
+        self.downloaded_urls.append(url)
         return FakeResponse([b"%PDF-1.4\n"])
 
     def close(self) -> None:
@@ -766,6 +832,183 @@ class WatcherHelpersTest(unittest.TestCase):
         )
         self.assertEqual(fake_session.calls[0][1]["params"], {"idFile": "IIS#18660489"})
         self.assertTrue(fake_session.calls[0][1]["stream"])
+
+    def test_foyer_config_validates_credentials_and_defaults(self) -> None:
+        account = SourceAccountConfig(
+            name="alice_foyer",
+            source="foyer",
+            maximum_document_mb=100,
+            runtime_dir=Path("/tmp/alice_foyer"),
+            state_file=Path("/tmp/alice_foyer/state.json"),
+            lock_file=Path("/tmp/alice_foyer/.run.lock"),
+            source_settings={
+                "username": "alice",
+                "password": "secret",
+                "page_limit": "25",
+                "lookback_years": "3",
+            },
+        )
+
+        foyer = foyer_account_from_source(account)
+
+        self.assertEqual(foyer.username, "alice")
+        self.assertEqual(foyer.page_limit, 25)
+        self.assertEqual(foyer.lookback_years, 3)
+        self.assertEqual(foyer.token_file, Path("/tmp/alice_foyer/foyer_token.json"))
+
+    def test_foyer_collects_lazy_loaded_offset_pages_and_dedupes(self) -> None:
+        client = FakeFoyerClient(
+            {
+                (
+                    "/v1/contrats/documents",
+                    0,
+                ): {
+                    "data": [
+                        {
+                            "id": "contract-new",
+                            "attributes": {
+                                "codeDocument": {"label": "Contract newer"},
+                                "dateEmission": "2026-02-01",
+                                "url": "https://api.foyer.lu/files/download?token=new",
+                            },
+                        },
+                        {
+                            "id": "contract-overlap",
+                            "attributes": {
+                                "codeDocument": {"label": "Contract overlap"},
+                                "dateEmission": "2026-01-15",
+                                "url": "https://api.foyer.lu/files/download?token=overlap",
+                            },
+                        },
+                    ],
+                    "meta": {
+                        "totalRecords": 3,
+                        "page": {"offset": 0, "limit": 2},
+                    },
+                },
+                (
+                    "/v1/contrats/documents",
+                    2,
+                ): {
+                    "data": [
+                        {
+                            "id": "contract-overlap",
+                            "attributes": {
+                                "codeDocument": {"label": "Contract overlap"},
+                                "dateEmission": "2026-01-15",
+                                "url": "https://api.foyer.lu/files/download?token=overlap",
+                            },
+                        },
+                        {
+                            "id": "contract-old",
+                            "attributes": {
+                                "codeDocument": {"label": "Contract older"},
+                                "dateEmission": "2026-01-01",
+                                "url": "https://api.foyer.lu/files/download?token=old",
+                            },
+                        },
+                    ],
+                    "meta": {
+                        "totalRecords": 3,
+                        "page": {"offset": 2, "limit": 2},
+                    },
+                },
+            }
+        )
+
+        documents = collect_foyer_documents(
+            client,  # type: ignore[arg-type]
+            client_number="885719",
+            lookback=date(2021, 9, 21),
+            page_limit=2,
+        )
+
+        self.assertEqual(
+            [document.id for document in documents],
+            ["contract:contract-old", "contract:contract-overlap", "contract:contract-new"],
+        )
+        self.assertEqual(
+            [
+                (path, page)
+                for path, page, _ in client.requested_pages
+                if path == "/v1/contrats/documents"
+            ],
+            [("/v1/contrats/documents", 0), ("/v1/contrats/documents", 2)],
+        )
+        invoice_request = next(
+            params
+            for path, _, params in client.requested_pages
+            if path == "/v1/compta/situation-compte/liste-documents-factures"
+        )
+        self.assertEqual(invoice_request["filter[client]"], "885719")
+
+    def test_foyer_source_maps_documents_and_persists_token(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fake_client = FakeFoyerClient(
+                {
+                    (
+                        "/v1/compta/situation-compte/liste-documents-factures",
+                        0,
+                    ): {
+                        "data": [
+                            {
+                                "id": "invoice-new",
+                                "attributes": {
+                                    "numeroFacture": "F2026-001",
+                                    "dateCreation": "2026-02-01",
+                                    "href": "https://api.foyer.lu/files/download?token=invoice",
+                                },
+                            },
+                            {
+                                "id": "invoice-seen",
+                                "attributes": {
+                                    "numeroFacture": "F2026-000",
+                                    "dateCreation": "2026-01-01",
+                                    "href": "https://api.foyer.lu/files/download?token=seen",
+                                },
+                            },
+                        ],
+                        "meta": {
+                            "totalRecords": 2,
+                            "page": {"offset": 0, "limit": 50},
+                        },
+                    },
+                }
+            )
+            account = SourceAccountConfig(
+                name="alice_foyer",
+                source="foyer",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+                source_settings={"username": "alice", "password": "secret"},
+            )
+            source = FoyerDocumentSource(lambda: fake_client)  # type: ignore[arg-type]
+
+            messages = source.collect_unseen(
+                account, SourceContext(CliInputBroker()), seen={"invoice:invoice-seen"}
+            )
+            documents = source.list_documents(
+                account, SourceContext(CliInputBroker()), messages[0]
+            )
+            response = source.open_document(
+                account, SourceContext(CliInputBroker()), messages[0], documents[0]
+            )
+
+            token_file = root / "foyer_token.json"
+            self.assertEqual([message.id for message in messages], ["invoice:invoice-new"])
+            self.assertEqual(documents[0].name, "F2026-001")
+            self.assertEqual(documents[0].content_type, "application/pdf")
+            self.assertEqual(fake_client.logged_in, [("alice", "secret")])
+            self.assertEqual(
+                fake_client.downloaded_urls,
+                ["https://api.foyer.lu/files/download?token=invoice"],
+            )
+            self.assertTrue(token_file.exists())
+            self.assertIn("foyer-access-token", token_file.read_text(encoding="utf-8"))
+            response.close()
 
     def test_prosyndic_config_requires_https_base_url(self) -> None:
         account = SourceAccountConfig(

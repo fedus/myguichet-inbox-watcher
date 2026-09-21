@@ -2,8 +2,8 @@
 
 This small, unofficial tool checks configured document inboxes, fetches
 documents it has not processed before, and sends those documents to configured
-outputs. It ships with MyGuichet, DKV/Lalux EasyApp, and ProSyndic source
-plugins, plus a folder output plugin.
+outputs. It ships with MyGuichet, DKV/Lalux EasyApp, ProSyndic, and Foyer
+source plugins, plus a folder output plugin.
 
 MyGuichet uses the normal MyGuichet/LuxTrust login flow: the username and
 password can be entered by Playwright, but the LuxTrust mobile/device approval
@@ -23,6 +23,7 @@ The project is designed for a private macOS or Linux machine with Python 3.10+.
 | `watcher_core.py` | Source/output-agnostic polling, state, locking, staging, size-limit, and checkpoint handling. |
 | `sources/base.py` | Small protocol a document source implements. |
 | `sources/dkv/` | DKV/Lalux EasyApp source plugin: config, OAuth/SMS OTP client, reimbursement adapter. |
+| `sources/foyer/` | Foyer source plugin: config, OIDC/PKCE login client, multi-category document adapter. |
 | `sources/myguichet/` | MyGuichet source plugin: config, API client, LuxTrust login, source adapter, and probe command. |
 | `sources/prosyndic/` | ProSyndic source plugin: config, HTTP login/listing/download client, nested-folder adapter. |
 | `outputs/base.py` | Small protocol a document output implements. |
@@ -141,15 +142,15 @@ after generic wiring has selected them.
 This example has:
 
 - users: Alice and Bob
-- source plugins: `myguichet`, `dkv`, `prosyndic`, and a made-up `otherservice`
+- source plugins: `myguichet`, `dkv`, `prosyndic`, `foyer`, and a made-up `otherservice`
 - output plugins: the built-in `folder` output and a made-up `example_api`
 - Alice uses only `myguichet`
-- Bob uses `myguichet`, `dkv`, `prosyndic`, and `otherservice`
+- Bob uses `myguichet`, `dkv`, `prosyndic`, `foyer`, and `otherservice`
 
 ```dotenv
 DOCUMENT_USERS=alice,bob
 DOCUMENT_ALICE_SOURCES=myguichet
-DOCUMENT_BOB_SOURCES=myguichet,dkv,prosyndic,otherservice
+DOCUMENT_BOB_SOURCES=myguichet,dkv,prosyndic,foyer,otherservice
 
 # Alice: MyGuichet -> folder + API
 DOCUMENT_ALICE_MYGUICHET_LUXTRUST_USERNAME=alice-luxtrust-user
@@ -185,6 +186,14 @@ DOCUMENT_BOB_PROSYNDIC_PAGE_LIMIT=100
 DOCUMENT_BOB_PROSYNDIC_OUTPUTS=local:folder
 DOCUMENT_BOB_PROSYNDIC_OUTPUT_LOCAL_DIRECTORY=/srv/documents/bob/prosyndic
 
+# Bob: Foyer customer documents -> folder only
+DOCUMENT_BOB_FOYER_USERNAME=bob-foyer-user
+DOCUMENT_BOB_FOYER_PASSWORD=bob-foyer-password
+DOCUMENT_BOB_FOYER_PAGE_LIMIT=50
+DOCUMENT_BOB_FOYER_LOOKBACK_YEARS=5
+DOCUMENT_BOB_FOYER_OUTPUTS=local:folder
+DOCUMENT_BOB_FOYER_OUTPUT_LOCAL_DIRECTORY=/srv/documents/bob/foyer
+
 # Bob: OtherService -> folder + API
 DOCUMENT_BOB_OTHERSERVICE_USERNAME=bob-other-user
 DOCUMENT_BOB_OTHERSERVICE_PASSWORD=bob-other-password
@@ -195,8 +204,8 @@ DOCUMENT_BOB_OTHERSERVICE_OUTPUT_ARCHIVE_TOKEN=bob-api-token
 ```
 
 The `example_api` and `otherservice` plugins above are illustrative names; this
-repo currently implements `myguichet`, `dkv`, and `prosyndic` sources and the
-`folder` output.
+repo currently implements `myguichet`, `dkv`, `prosyndic`, and `foyer` sources
+and the `folder` output.
 
 ## Folder Output
 
@@ -287,6 +296,26 @@ DOCUMENT_<USER>_PROSYNDIC_PAGE_LIMIT=100
 `BASE_URL` is required because ProSyndic uses tenant-specific hostnames. Each
 remote ProSyndic document is treated as one source message, so clearing or
 unseeing persisted state works at document granularity.
+
+## Foyer Source
+
+The `foyer` source logs into the Foyer customer portal with the normal
+username/password form and OIDC/PKCE token exchange. No OTP was observed in the
+captured flow. It aggregates the document categories exposed by the portal,
+including contract documents, invoices, medical documents, life documents, TAVP
+documents, and bilan documents when those lists return downloadable files.
+
+```dotenv
+DOCUMENT_<USER>_FOYER_USERNAME=your-login
+DOCUMENT_<USER>_FOYER_PASSWORD=your-password
+DOCUMENT_<USER>_FOYER_PAGE_LIMIT=50
+DOCUMENT_<USER>_FOYER_LOOKBACK_YEARS=5
+```
+
+`PAGE_LIMIT` controls API page size. `LOOKBACK_YEARS` defaults to `5` and is
+used for the date filters that the portal applies to most document lists. The
+source keeps a saved refresh/access token in the account runtime directory and
+falls back to password login when the refresh token is rejected.
 
 ## External Input and OTP
 
