@@ -12,3 +12,4 @@ __pycache__/
 .DS_Store
 *.log
 compose.local.yaml
+compose.local.yml
