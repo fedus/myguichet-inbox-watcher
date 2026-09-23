@@ -22,8 +22,8 @@ services:
       - "${DOCUMENT_API_PORT:-8000}:${DOCUMENT_API_PORT:-8000}"
 
     volumes:
-      - document-watcher-accounts:/app/accounts
-      - ./downloads:/app/downloads
+      - "${DOCUMENT_ACCOUNTS_MOUNT:-document-watcher-accounts}:/app/accounts"
+      - "${DOCUMENT_DOWNLOADS_MOUNT:-./downloads}:/app/downloads"
 
     restart: "no"
     stop_grace_period: 45s

@@ -81,9 +81,27 @@ docker compose up
 
 The image contains the application code. Runtime files are mounted separately:
 
-- `document-watcher-accounts:/app/accounts` for cookies, OAuth tokens, browser
-  profiles, locks, and state.
-- `./downloads:/app/downloads` for the default folder output.
+- `${DOCUMENT_ACCOUNTS_MOUNT:-document-watcher-accounts}:/app/accounts` for
+  cookies, OAuth tokens, browser profiles, locks, and state.
+- `${DOCUMENT_DOWNLOADS_MOUNT:-./downloads}:/app/downloads` for the default
+  folder output.
+
+Override these in `.env` when you want host bind mounts or different paths:
+
+```dotenv
+DOCUMENT_ACCOUNTS_MOUNT=./accounts
+DOCUMENT_DOWNLOADS_MOUNT=/srv/document-watcher/downloads
+```
+
+You can also keep machine-local paths in `docker-compose.override.yml`:
+
+```yaml
+services:
+  document-watcher:
+    volumes:
+      - ./accounts:/app/accounts
+      - /srv/document-watcher/downloads:/app/downloads
+```
 
 Set `DOCUMENT_RUN_MODE=mqtt` in `.env` to run the MQTT subscriber instead of a
 one-shot poll. You can also set it for a single Compose invocation:
