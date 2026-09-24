@@ -22,7 +22,7 @@ The project is designed for a private macOS or Linux machine with Python 3.10+.
 | `document_watcher.py` | Main command: resolves configured document accounts and runs the watcher. |
 | `watcher_core.py` | Source/output-agnostic polling, state, locking, staging, size-limit, and checkpoint handling. |
 | `sources/base.py` | Small protocol a document source implements. |
-| `sources/dkv/` | DKV/Lalux EasyApp source plugin: config, OAuth/SMS OTP client, reimbursement adapter. |
+| `sources/dkv/` | DKV/Lalux EasyApp source plugin: config, OAuth/SMS OTP client, reimbursement/document adapter. |
 | `sources/foyer/` | Foyer source plugin: config, OIDC/PKCE login client, multi-category document adapter. |
 | `sources/myguichet/` | MyGuichet source plugin: config, API client, LuxTrust login, source adapter, and probe command. |
 | `sources/prosyndic/` | ProSyndic source plugin: config, HTTP login/listing/download client, nested-folder adapter. |
@@ -189,7 +189,7 @@ DOCUMENT_BOB_MYGUICHET_HEADLESS=true
 DOCUMENT_BOB_MYGUICHET_OUTPUTS=local:folder
 DOCUMENT_BOB_MYGUICHET_OUTPUT_LOCAL_DIRECTORY=/srv/documents/bob/myguichet
 
-# Bob: DKV/Lalux EasyApp treated reimbursements -> folder only
+# Bob: DKV/Lalux EasyApp documents -> folder only
 DOCUMENT_BOB_DKV_USERNAME=bob-dkv-user
 DOCUMENT_BOB_DKV_PASSWORD=bob-dkv-password
 DOCUMENT_BOB_DKV_OTP_TIMEOUT_SECONDS=300
@@ -281,8 +281,11 @@ unattended setup must put both values in `.env`.
 ## DKV/Lalux EasyApp Source
 
 The `dkv` source uses the Lalux EasyApp API seen by the web frontend. It
-retrieves only reimbursements whose status code is `TREATED`; submitted/sent
-reimbursements are intentionally skipped.
+retrieves reimbursements whose status code is `TREATED`; submitted/sent
+reimbursements are intentionally skipped. It also reads the document tab
+categories, such as tax certificates, plus invoice documents when the invoice
+API marks an invoice as having a document. Empty invoice tabs are treated as an
+empty list.
 
 ```dotenv
 DOCUMENT_<USER>_DKV_USERNAME=your-login

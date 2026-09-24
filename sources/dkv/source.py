@@ -1,4 +1,4 @@
-"""DKV/Lalux EasyApp source adapter for treated reimbursements."""
+"""DKV/Lalux EasyApp source adapter."""
 
 from __future__ import annotations
 
@@ -35,6 +35,9 @@ from storage import atomic_write_text, restrict_file
 
 TREATED_STATUS_CODE = "TREATED"
 TOKEN_EXPIRY_SKEW_SECONDS = 30
+MESSAGE_KIND_AVAILABLE_DOCUMENT = "available_document"
+MESSAGE_KIND_INVOICE = "invoice"
+MESSAGE_KIND_REFUND = "refund"
 
 
 def _source_error(error: DkvError) -> SourceError:
@@ -72,40 +75,50 @@ def _paging_info(payload: dict[str, Any]) -> tuple[int, int, int] | None:
     return None
 
 
+def _paginated_items(
+    fetch_page: Callable[[int, int], dict[str, Any]], page_limit: int
+) -> list[dict[str, Any]]:
+    """Read every infinite-scroll page for endpoints with groups/pagingInfo."""
+    items: list[dict[str, Any]] = []
+    page_index = 0
+    while True:
+        payload = fetch_page(page_index, page_limit)
+        page_items = _items_from_page(payload)
+        items.extend(page_items)
+
+        paging = _paging_info(payload)
+        if paging is None:
+            if len(page_items) < page_limit:
+                break
+        else:
+            limit, offset, total = paging
+            if offset + len(page_items) >= total:
+                break
+            if limit > 0:
+                page_limit = limit
+        if not page_items:
+            break
+        page_index += 1
+    return items
+
+
 def collect_treated_refunds(
     client: DkvClient, seen: set[str], page_limit: int = DEFAULT_PAGE_LIMIT
 ) -> list[tuple[str, dict[str, Any]]]:
     """Read every refund list page and return unseen treated reimbursements."""
     unseen: list[tuple[str, dict[str, Any]]] = []
     collected_ids: set[str] = set()
-    page_index = 0
-    while True:
-        payload = client.list_refunds(page_index=page_index, limit=page_limit)
-        items = _items_from_page(payload)
-        for item in items:
-            refund_id = item.get("id")
-            if (
-                isinstance(refund_id, str)
-                and item.get("statusCode") == TREATED_STATUS_CODE
-                and refund_id not in seen
-                and refund_id not in collected_ids
-            ):
-                unseen.append((refund_id, item))
-                collected_ids.add(refund_id)
-
-        paging = _paging_info(payload)
-        if paging is None:
-            if len(items) < page_limit:
-                break
-        else:
-            limit, offset, total = paging
-            if offset + len(items) >= total:
-                break
-            if limit > 0:
-                page_limit = limit
-        if not items:
-            break
-        page_index += 1
+    items = _paginated_items(client.list_refunds, page_limit)
+    for item in items:
+        refund_id = item.get("id")
+        if (
+            isinstance(refund_id, str)
+            and item.get("statusCode") == TREATED_STATUS_CODE
+            and refund_id not in seen
+            and refund_id not in collected_ids
+        ):
+            unseen.append((refund_id, item))
+            collected_ids.add(refund_id)
 
     unseen.reverse()
     return unseen
@@ -114,6 +127,7 @@ def collect_treated_refunds(
 def _message_metadata(refund: dict[str, Any]) -> dict[str, Any]:
     return {
         "subject": refund.get("title") or refund.get("description") or "Reimbursement",
+        "kind": MESSAGE_KIND_REFUND,
         "status": refund.get("status"),
         "statusCode": refund.get("statusCode"),
         "raw": refund,
@@ -153,6 +167,133 @@ def documents_from_refund_detail(
     return result
 
 
+def _available_document_metadata(
+    document: dict[str, Any],
+    category: dict[str, Any],
+    subcategory: dict[str, Any],
+    source_type: str,
+) -> dict[str, Any]:
+    return {
+        "subject": document.get("label") or document.get("idDocument") or "Document",
+        "kind": MESSAGE_KIND_AVAILABLE_DOCUMENT,
+        "source_type": source_type,
+        "category": category.get("libelleCategory") or category.get("idCategory"),
+        "subcategory": subcategory.get("title"),
+        "raw": {
+            "document": document,
+            "category": category,
+            "subcategory": subcategory,
+        },
+    }
+
+
+def collect_available_documents(
+    categories: list[Any],
+    seen: set[str],
+    *,
+    source_type: str,
+) -> list[SourceMessage]:
+    """Flatten the DKV document-tab category tree into unseen messages."""
+    messages: list[SourceMessage] = []
+    collected_ids: set[str] = set()
+    for category in categories:
+        if not isinstance(category, dict):
+            continue
+        subcategories = category.get("subCategories")
+        if not isinstance(subcategories, list):
+            continue
+        for subcategory in subcategories:
+            if not isinstance(subcategory, dict):
+                continue
+            documents = subcategory.get("documents")
+            if not isinstance(documents, list):
+                continue
+            for document in documents:
+                if not isinstance(document, dict):
+                    continue
+                document_id = document.get("idDocument")
+                if (
+                    not isinstance(document_id, str)
+                    or not document_id
+                    or document_id in seen
+                    or document_id in collected_ids
+                ):
+                    continue
+                messages.append(
+                    SourceMessage(
+                        id=document_id,
+                        metadata=_available_document_metadata(
+                            document, category, subcategory, source_type
+                        ),
+                    )
+                )
+                collected_ids.add(document_id)
+    return messages
+
+
+def document_from_available_message(message: SourceMessage) -> SourceDocument:
+    raw = message.metadata.get("raw")
+    document = raw.get("document") if isinstance(raw, dict) else None
+    if not isinstance(document, dict):
+        raise SourceResponseError(
+            f"DKV/Lalux EasyApp document {message.id!r} is missing metadata."
+        )
+    name = str(document.get("label") or message.id)
+    return SourceDocument(
+        id=message.id,
+        name=name,
+        content_type="application/pdf",
+        metadata=message.metadata,
+    )
+
+
+def collect_invoice_messages(
+    client: DkvClient, seen: set[str], page_limit: int
+) -> list[SourceMessage]:
+    """Read invoice pages and return unseen invoices that expose a document."""
+    items = _paginated_items(client.list_invoices, page_limit)
+    messages: list[SourceMessage] = []
+    collected_ids: set[str] = set()
+    for item in items:
+        invoice_id = item.get("id")
+        if (
+            not isinstance(invoice_id, str)
+            or not invoice_id
+            or invoice_id in seen
+            or invoice_id in collected_ids
+            or item.get("documentAvailable") is not True
+        ):
+            continue
+        messages.append(
+            SourceMessage(
+                id=invoice_id,
+                metadata={
+                    "subject": item.get("label") or item.get("amount") or "Invoice",
+                    "kind": MESSAGE_KIND_INVOICE,
+                    "date": item.get("date"),
+                    "status": item.get("status"),
+                    "statusCode": item.get("statusCode"),
+                    "raw": item,
+                },
+            )
+        )
+        collected_ids.add(invoice_id)
+    messages.reverse()
+    return messages
+
+
+def document_from_invoice_detail(invoice_id: str, detail: dict[str, Any]) -> SourceDocument:
+    document_id = detail.get("gedDocumentId")
+    if not isinstance(document_id, str) or not document_id:
+        raise SourceResponseError(f"Invoice {invoice_id} does not expose a document ID.")
+    return SourceDocument(
+        id=document_id,
+        name=str(detail.get("label") or invoice_id),
+        content_type="application/pdf",
+        metadata={"invoice": detail},
+    )
+
+
 def _token_with_expiry(payload: dict[str, Any]) -> dict[str, Any]:
     now = time.time()
     token = dict(payload)
@@ -173,7 +314,7 @@ def _token_valid(token: dict[str, Any], key: str) -> bool:
 
 
 class DkvDocumentSource:
-    """Source adapter for DKV/Lalux EasyApp treated reimbursements."""
+    """Source adapter for DKV/Lalux EasyApp documents."""
 
     name = "dkv"
 
@@ -281,17 +422,38 @@ class DkvDocumentSource:
     ) -> list[SourceMessage]:
         dkv_account = self._account(account)
         try:
+            client = self._authenticated_client(account, context)
             refunds = collect_treated_refunds(
-                self._authenticated_client(account, context),
-                seen,
-                dkv_account.page_limit,
+                client, seen, dkv_account.page_limit
+            )
+            refund_messages = [
+                SourceMessage(id=refund_id, metadata=_message_metadata(metadata))
+                for refund_id, metadata in refunds
+            ]
+            collected_ids = {message.id for message in refund_messages}
+            available_documents = collect_available_documents(
+                client.list_available_documents(),
+                seen | collected_ids,
+                source_type="available",
+            )
+            collected_ids.update(message.id for message in available_documents)
+            on_demand_documents = collect_available_documents(
+                client.list_on_demand_documents(),
+                seen | collected_ids,
+                source_type="on-demand",
+            )
+            collected_ids.update(message.id for message in on_demand_documents)
+            invoice_messages = collect_invoice_messages(
+                client, seen | collected_ids, dkv_account.page_limit
             )
         except DkvError as error:
             raise _source_error(error) from error
-        return [
-            SourceMessage(id=refund_id, metadata=_message_metadata(metadata))
-            for refund_id, metadata in refunds
-        ]
+        return (
+            refund_messages
+            + available_documents
+            + on_demand_documents
+            + invoice_messages
+        )
 
     def list_documents(
         self,
@@ -300,7 +462,14 @@ class DkvDocumentSource:
         message: SourceMessage,
     ) -> list[SourceDocument]:
         try:
-            detail = self._authenticated_client(account, context).get_refund(message.id)
+            client = self._authenticated_client(account, context)
+            kind = message.metadata.get("kind")
+            if kind == MESSAGE_KIND_AVAILABLE_DOCUMENT:
+                return [document_from_available_message(message)]
+            if kind == MESSAGE_KIND_INVOICE:
+                detail = client.get_invoice(message.id)
+                return [document_from_invoice_detail(message.id, detail)]
+            detail = client.get_refund(message.id)
             return documents_from_refund_detail(message.id, detail)
         except DkvError as error:
             raise _source_error(error) from error

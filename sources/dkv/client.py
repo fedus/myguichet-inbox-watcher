@@ -101,6 +101,22 @@ class DkvClient:
         return payload
 
     @staticmethod
+    def _json_list(response: requests.Response, description: str) -> list[Any]:
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise DkvResponseError(
+                f"DKV/Lalux EasyApp returned invalid JSON for {description}."
+            ) from error
+        finally:
+            response.close()
+        if not isinstance(payload, list):
+            raise DkvResponseError(
+                f"DKV/Lalux EasyApp returned an unexpected response for {description}."
+            )
+        return payload
+
+    @staticmethod
     def _require_token_payload(payload: dict[str, Any], description: str) -> dict[str, Any]:
         if not isinstance(payload.get("access_token"), str):
             raise DkvAuthenticationError(
@@ -230,6 +246,35 @@ class DkvClient:
     def list_refunds(self, page_index: int, limit: int) -> dict[str, Any]:
         """Return one infinite-scroll page of reimbursements."""
         return self._get_json("/refunds", limit=limit, pageIndex=page_index)
+
+    def list_available_documents(self) -> list[Any]:
+        """Return document categories available from the document tab."""
+        response = self._get("/documents/available")
+        return self._json_list(response, "available documents")
+
+    def list_on_demand_documents(self) -> list[Any]:
+        """Return on-demand document categories from the document tab."""
+        response = self._get("/documents/on-demand")
+        return self._json_list(response, "on-demand documents")
+
+    def list_invoices(self, page_index: int, limit: int) -> dict[str, Any]:
+        """Return one infinite-scroll page of invoices."""
+        response = self._get("/invoices", limit=limit, pageIndex=page_index)
+        if response.status_code == 204:
+            response.close()
+            return {
+                "groups": [],
+                "pagingInfo": {
+                    "limit": limit,
+                    "offset": page_index * limit,
+                    "total": 0,
+                },
+            }
+        return self._json(response, "/invoices")
+
+    def get_invoice(self, invoice_id: str) -> dict[str, Any]:
+        """Return one invoice detail response."""
+        return self._get_json(f"/invoices/{quote(invoice_id, safe='')}")
 
     def get_refund(self, refund_id: str) -> dict[str, Any]:
         """Return one reimbursement detail response."""

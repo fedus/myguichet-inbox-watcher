@@ -42,7 +42,10 @@ from outputs.folder import FolderOutput  # noqa: E402
 from sources import register_source  # noqa: E402
 from sources.dkv import (  # noqa: E402
     DkvDocumentSource,
+    collect_available_documents,
+    collect_invoice_messages,
     collect_treated_refunds,
+    document_from_invoice_detail,
     documents_from_refund_detail,
 )
 from sources.dkv.client import DkvClient  # noqa: E402
@@ -116,6 +119,16 @@ class FakeDkvAuthClient:
         self.access_token = ""
         self.closed = False
         self.completed_otp = ""
+        self.available_documents: list[object] = []
+        self.on_demand_documents: list[object] = []
+        self.invoice_pages: dict[int, dict[str, object]] = {
+            0: {
+                "groups": [{"items": []}],
+                "pagingInfo": {"limit": 20, "offset": 0, "total": 0},
+            }
+        }
+        self.invoice_details: dict[str, dict[str, object]] = {}
+        self.downloaded_documents: list[str] = []
 
     def start_sms_login(
         self, username: str, password: str, otp_type: str
@@ -147,6 +160,23 @@ class FakeDkvAuthClient:
     def list_refunds(self, page_index: int, limit: int) -> dict[str, object]:
         del page_index, limit
         return {"groups": [{"items": []}], "pagingInfo": {"limit": 20, "offset": 0, "total": 0}}
+
+    def list_available_documents(self) -> list[object]:
+        return self.available_documents
+
+    def list_on_demand_documents(self) -> list[object]:
+        return self.on_demand_documents
+
+    def list_invoices(self, page_index: int, limit: int) -> dict[str, object]:
+        del limit
+        return self.invoice_pages[page_index]
+
+    def get_invoice(self, invoice_id: str) -> dict[str, object]:
+        return self.invoice_details[invoice_id]
+
+    def download_document(self, document_id: str) -> FakeResponse:
+        self.downloaded_documents.append(document_id)
+        return FakeResponse([b"%PDF-1.4\n"])
 
     def close(self) -> None:
         self.closed = True
@@ -240,22 +270,31 @@ class FakeFoyerClient:
 
 
 class FakeHttpResponse:
-    def __init__(self, status_code: int = 200) -> None:
+    def __init__(
+        self, status_code: int = 200, payload: object | None = None
+    ) -> None:
         self.status_code = status_code
         self.headers: dict[str, str] = {}
+        self.payload = payload
         self.closed = False
+
+    def json(self) -> object:
+        return self.payload
 
     def close(self) -> None:
         self.closed = True
 
 
 class FakeHttpSession:
-    def __init__(self) -> None:
+    def __init__(self, responses: list[FakeHttpResponse] | None = None) -> None:
         self.headers: dict[str, str] = {}
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.responses = responses or []
 
     def get(self, url: str, **kwargs: object) -> FakeHttpResponse:
         self.calls.append((url, kwargs))
+        if self.responses:
+            return self.responses.pop(0)
         return FakeHttpResponse()
 
 
@@ -780,6 +819,170 @@ class WatcherHelpersTest(unittest.TestCase):
                 {"id": "REFUND_SUBMIT#1", "statusCode": "SENT", "listDocument": []},
             )
 
+    def test_dkv_available_documents_flatten_tax_certificate_categories(self) -> None:
+        messages = collect_available_documents(
+            [
+                {
+                    "idCategory": "1",
+                    "libelleCategory": "Tax certificates",
+                    "logo": "tax_certificate",
+                    "subCategories": [
+                        {"title": "Tax certificate received 2026", "documents": []},
+                        {
+                            "title": "Tax certificate received 2025",
+                            "documents": [
+                                {
+                                    "idDocument": "CONT#Clients-624143106-1445889",
+                                    "label": "Tax certificate Life",
+                                    "logo": "tax_certificate",
+                                    "order": 0,
+                                }
+                            ],
+                        },
+                        {
+                            "title": "Tax certificate received 2024",
+                            "documents": [
+                                {
+                                    "idDocument": "CONT#Clients-624143106-1401096",
+                                    "label": "Tax certificate Life",
+                                    "logo": "tax_certificate",
+                                    "order": 0,
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+            seen={"CONT#Clients-624143106-1401096"},
+            source_type="available",
+        )
+
+        self.assertEqual(
+            [message.id for message in messages],
+            ["CONT#Clients-624143106-1445889"],
+        )
+        self.assertEqual(messages[0].metadata["kind"], "available_document")
+        self.assertEqual(messages[0].metadata["category"], "Tax certificates")
+        self.assertEqual(
+            messages[0].metadata["subcategory"], "Tax certificate received 2025"
+        )
+
+    def test_dkv_invoice_collection_follows_lazy_loaded_pages(self) -> None:
+        fake_client = FakeDkvAuthClient()
+        fake_client.invoice_pages = {
+            0: {
+                "groups": [
+                    {
+                        "items": [
+                            {
+                                "id": "INV#new",
+                                "label": "Invoice newer",
+                                "date": "03.09.2026",
+                                "documentAvailable": True,
+                            },
+                            {
+                                "id": "INV#without-document",
+                                "label": "Invoice no doc",
+                                "documentAvailable": False,
+                            },
+                        ]
+                    }
+                ],
+                "pagingInfo": {"limit": 2, "offset": 0, "total": 4},
+            },
+            1: {
+                "groups": [
+                    {
+                        "items": [
+                            {
+                                "id": "INV#old",
+                                "label": "Invoice older",
+                                "date": "01.09.2026",
+                                "documentAvailable": True,
+                            },
+                            {
+                                "id": "INV#seen",
+                                "label": "Invoice seen",
+                                "documentAvailable": True,
+                            },
+                        ]
+                    }
+                ],
+                "pagingInfo": {"limit": 2, "offset": 2, "total": 4},
+            },
+        }
+
+        messages = collect_invoice_messages(
+            fake_client, seen={"INV#seen"}, page_limit=2  # type: ignore[arg-type]
+        )
+
+        self.assertEqual([message.id for message in messages], ["INV#old", "INV#new"])
+        self.assertEqual(messages[0].metadata["kind"], "invoice")
+
+    def test_dkv_invoice_detail_maps_downloadable_document(self) -> None:
+        document = document_from_invoice_detail(
+            "INV#1",
+            {
+                "label": "Invoice September",
+                "gedDocumentId": "FACT#2026#1",
+            },
+        )
+
+        self.assertEqual(document.id, "FACT#2026#1")
+        self.assertEqual(document.name, "Invoice September")
+        self.assertEqual(document.content_type, "application/pdf")
+
+    def test_dkv_source_collects_available_documents_and_downloads_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fake_client = FakeDkvAuthClient()
+            fake_client.available_documents = [
+                {
+                    "idCategory": "1",
+                    "libelleCategory": "Tax certificates",
+                    "subCategories": [
+                        {
+                            "title": "Tax certificate received 2025",
+                            "documents": [
+                                {
+                                    "idDocument": "CONT#Clients-624143106-1445889",
+                                    "label": "Tax certificate Life",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+            account = SourceAccountConfig(
+                name="alice_dkv",
+                source="dkv",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+                source_settings={"username": "alice-user", "password": "secret"},
+            )
+            source = DkvDocumentSource(lambda: fake_client)  # type: ignore[arg-type]
+
+            messages = source.collect_unseen(
+                account, SourceContext(StaticInputBroker({"code": "123456"})), seen=set()
+            )
+            documents = source.list_documents(
+                account, SourceContext(CliInputBroker()), messages[0]
+            )
+            response = source.open_document(
+                account, SourceContext(CliInputBroker()), messages[0], documents[0]
+            )
+
+            self.assertEqual([message.id for message in messages], ["CONT#Clients-624143106-1445889"])
+            self.assertEqual(documents[0].id, "CONT#Clients-624143106-1445889")
+            self.assertEqual(documents[0].name, "Tax certificate Life")
+            self.assertEqual(
+                fake_client.downloaded_documents,
+                ["CONT#Clients-624143106-1445889"],
+            )
+            response.close()
+
     def test_dkv_plugin_requests_sms_otp_and_persists_token(self) -> None:
         with (
             tempfile.TemporaryDirectory() as temporary_directory,
@@ -832,6 +1035,21 @@ class WatcherHelpersTest(unittest.TestCase):
         )
         self.assertEqual(fake_session.calls[0][1]["params"], {"idFile": "IIS#18660489"})
         self.assertTrue(fake_session.calls[0][1]["stream"])
+
+    def test_dkv_client_treats_empty_invoice_tab_as_empty_page(self) -> None:
+        client = DkvClient()
+        fake_session = FakeHttpSession([FakeHttpResponse(status_code=204)])
+        client.session = fake_session  # type: ignore[assignment]
+
+        payload = client.list_invoices(page_index=0, limit=20)
+
+        self.assertEqual(payload["groups"], [])
+        self.assertEqual(payload["pagingInfo"], {"limit": 20, "offset": 0, "total": 0})
+        self.assertTrue(fake_session.calls[0][0].endswith("/invoices"))
+        self.assertEqual(
+            fake_session.calls[0][1]["params"],
+            {"limit": 20, "pageIndex": 0},
+        )
 
     def test_foyer_config_validates_credentials_and_defaults(self) -> None:
         account = SourceAccountConfig(
