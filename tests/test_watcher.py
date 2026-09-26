@@ -52,7 +52,14 @@ from sources.dkv.client import DkvClient  # noqa: E402
 from sources.foyer import FoyerDocumentSource  # noqa: E402
 from sources.foyer.config import foyer_account_from_source  # noqa: E402
 from sources.foyer.source import collect_foyer_documents  # noqa: E402
-from sources.myguichet import REQUESTS_PER_PAGE, collect_unseen_communications  # noqa: E402
+from sources.myguichet import (  # noqa: E402
+    COMMUNAL_BILLS_PER_PAGE,
+    COMMUNAL_BILL_MESSAGE_KIND,
+    MyGuichetDocumentSource,
+    REQUESTS_PER_PAGE,
+    collect_communal_bills,
+    collect_unseen_communications,
+)
 from sources.myguichet import login as myguichet_login  # noqa: E402
 from sources.myguichet.config import myguichet_account_from_source  # noqa: E402
 from sources.prosyndic import (  # noqa: E402
@@ -92,11 +99,48 @@ class FakeClient:
     def __init__(self, pages: dict[int, dict[str, object]]) -> None:
         self.pages = pages
         self.requested_pages: list[int] = []
+        self.communal_status: dict[str, object] = {
+            "data": [{"origin": "VDL", "consentStatus": "ACCEPTED"}],
+            "size": 1,
+        }
+        self.communal_pages: dict[tuple[str, int], dict[str, object]] = {}
+        self.requested_communal_pages: list[tuple[str, int, int]] = []
+        self.edelivery_details: dict[str, dict[str, object]] = {}
+        self.downloaded_documents: list[tuple[str, str]] = []
+        self.downloaded_communal_bills: list[tuple[str, str]] = []
 
     def list_communications(self, page: int, per_page: int) -> dict[str, object]:
         self.requested_pages.append(page)
         self.assert_requested_page_size(per_page)
         return self.pages[page]
+
+    def list_communal_bill_consent_status(self) -> dict[str, object]:
+        return self.communal_status
+
+    def list_communal_bills(
+        self, backend: str, page_number: int, page_size: int
+    ) -> dict[str, object]:
+        self.requested_communal_pages.append((backend, page_number, page_size))
+        return self.communal_pages.get(
+            (backend, page_number),
+            {
+                "totalCount": 0,
+                "pageCount": 0,
+                "pageNumber": page_number,
+                "items": [],
+            },
+        )
+
+    def get_edelivery(self, communication_id: str) -> dict[str, object]:
+        return self.edelivery_details[communication_id]
+
+    def download_document(self, document_id: str, filename: str) -> FakeResponse:
+        self.downloaded_documents.append((document_id, filename))
+        return FakeResponse([b"%PDF-1.4\n"])
+
+    def download_communal_bill(self, document_id: str, backend: str) -> FakeResponse:
+        self.downloaded_communal_bills.append((document_id, backend))
+        return FakeResponse([b"%PDF-1.4\n"])
 
     @staticmethod
     def assert_requested_page_size(per_page: int) -> None:
@@ -751,6 +795,145 @@ class WatcherHelpersTest(unittest.TestCase):
             [communication_id for communication_id, _ in result], ["3", "4"]
         )
         self.assertEqual(client.requested_pages, [1, 2])
+
+    def test_myguichet_communal_bills_follow_lazy_loaded_pages(self) -> None:
+        client = FakeClient({1: {"nbTotalCommunication": 0, "myCommunicationList": []}})
+        client.communal_status = {
+            "data": [
+                {"origin": "SIGI", "consentStatus": "UNKNOWN"},
+                {"origin": "VDL", "consentStatus": "ACCEPTED"},
+            ],
+            "size": 2,
+        }
+        client.communal_pages = {
+            ("VDL", 1): {
+                "totalCount": 3,
+                "pageCount": 2,
+                "pageNumber": 1,
+                "items": [
+                    {
+                        "id": "bill-new",
+                        "creationDate": "2026-09-25T00:00:00Z",
+                        "reference": "F90296363",
+                        "administrationName": "VDL",
+                        "documentType": "Service Sports",
+                        "mimeType": "application/pdf",
+                    },
+                    {
+                        "id": "bill-seen",
+                        "creationDate": "2025-12-15T00:00:00Z",
+                        "reference": "F90236835",
+                        "administrationName": "VDL",
+                        "documentType": "Bierger-Center",
+                        "mimeType": "application/pdf",
+                    },
+                ],
+            },
+            ("VDL", 2): {
+                "totalCount": 3,
+                "pageCount": 2,
+                "pageNumber": 2,
+                "items": [
+                    {
+                        "id": "bill-old",
+                        "creationDate": "2023-05-25T00:00:00Z",
+                        "reference": "ECI93075244",
+                        "administrationName": "VDL",
+                        "documentType": "Etat Civil",
+                        "mimeType": "application/pdf",
+                    }
+                ],
+            },
+        }
+
+        bills = collect_communal_bills(
+            client,  # type: ignore[arg-type]
+            seen={"bill-seen"},
+            page_size=10,
+        )
+
+        self.assertEqual(
+            [(bill_id, backend) for bill_id, _, backend in bills],
+            [("bill-old", "VDL"), ("bill-new", "VDL")],
+        )
+        self.assertEqual(client.requested_communal_pages, [("VDL", 1, 10), ("VDL", 2, 10)])
+
+    def test_myguichet_source_collects_and_downloads_communal_bills(self) -> None:
+        fake_client = FakeClient(
+            {
+                1: {
+                    "nbTotalCommunication": 1,
+                    "myCommunicationList": [communication(123)],
+                },
+            }
+        )
+        fake_client.edelivery_details = {
+            "123": {
+                "attachmentList": [
+                    {
+                        "externalDocId": "external-doc-1",
+                        "docName": "message.pdf",
+                    }
+                ]
+            }
+        }
+        fake_client.communal_pages = {
+            ("VDL", 1): {
+                "totalCount": 1,
+                "pageCount": 1,
+                "pageNumber": 1,
+                "items": [
+                    {
+                        "id": "cde4ad8d-479f-46e2-8dca-4abac383c1da",
+                        "creationDate": "2026-09-25T00:00:00Z",
+                        "reference": "F90296363",
+                        "administrationName": "VDL",
+                        "documentType": "Service Sports",
+                        "mimeType": "application/pdf",
+                    }
+                ],
+            }
+        }
+        account = SourceAccountConfig(
+            name="alice_myguichet",
+            source="myguichet",
+            maximum_document_mb=100,
+            runtime_dir=Path("/tmp/alice_myguichet"),
+            state_file=Path("/tmp/alice_myguichet/state.json"),
+            lock_file=Path("/tmp/alice_myguichet/.run.lock"),
+            source_settings={"space_id": "10906"},
+        )
+        source = MyGuichetDocumentSource()
+        source.client = fake_client  # type: ignore[assignment]
+
+        messages = source.collect_unseen(
+            account, SourceContext(CliInputBroker()), seen=set()
+        )
+        bill_message = next(
+            message
+            for message in messages
+            if message.metadata.get("kind") == COMMUNAL_BILL_MESSAGE_KIND
+        )
+        bill_documents = source.list_documents(
+            account, SourceContext(CliInputBroker()), bill_message
+        )
+        bill_response = source.open_document(
+            account, SourceContext(CliInputBroker()), bill_message, bill_documents[0]
+        )
+        communication_message = next(message for message in messages if message.id == "123")
+        communication_documents = source.list_documents(
+            account, SourceContext(CliInputBroker()), communication_message
+        )
+
+        self.assertEqual([message.id for message in messages], ["123", "cde4ad8d-479f-46e2-8dca-4abac383c1da"])
+        self.assertEqual(bill_documents[0].name, "2026-09-25 - VDL - Service Sports - F90296363.pdf")
+        self.assertEqual(bill_documents[0].content_type, "application/pdf")
+        self.assertEqual(
+            fake_client.downloaded_communal_bills,
+            [("cde4ad8d-479f-46e2-8dca-4abac383c1da", "VDL")],
+        )
+        self.assertEqual(communication_documents[0].id, "external-doc-1")
+        bill_response.close()
 
     def test_dkv_pagination_collects_only_unseen_treated_refunds_to_the_end(self) -> None:
         client = FakeDkvListClient(

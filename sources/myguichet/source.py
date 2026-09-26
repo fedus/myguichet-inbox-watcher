@@ -29,6 +29,9 @@ from sources.myguichet.config import (
 
 
 REQUESTS_PER_PAGE = 100
+COMMUNAL_BILLS_PER_PAGE = 100
+COMMUNAL_BILL_MESSAGE_KIND = "communal_bill"
+DEFAULT_COMMUNAL_BILL_BACKEND = "VDL"
 
 
 def _first_text(metadata: dict[str, Any], *keys: str) -> object:
@@ -52,6 +55,41 @@ def _message_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         ),
         "raw": metadata,
     }
+
+
+def _communal_bill_subject(item: dict[str, Any]) -> str:
+    parts = [
+        str(item.get("administrationName") or "").strip(),
+        str(item.get("documentType") or "").strip(),
+        str(item.get("reference") or "").strip(),
+    ]
+    text = " - ".join(part for part in parts if part)
+    return text or str(item.get("id") or "Communal bill")
+
+
+def _communal_bill_metadata(item: dict[str, Any], backend: str) -> dict[str, Any]:
+    return {
+        "kind": COMMUNAL_BILL_MESSAGE_KIND,
+        "date": item.get("creationDate") or "",
+        "sender": item.get("administrationName") or backend,
+        "subject": _communal_bill_subject(item),
+        "backend": backend,
+        "reference": item.get("reference"),
+        "documentType": item.get("documentType"),
+        "raw": item,
+    }
+
+
+def _communal_bill_document_name(item: dict[str, Any]) -> str:
+    date_value = str(item.get("creationDate") or "")[:10]
+    parts = [
+        date_value,
+        str(item.get("administrationName") or "").strip(),
+        str(item.get("documentType") or "").strip(),
+        str(item.get("reference") or "").strip(),
+    ]
+    stem = " - ".join(part for part in parts if part)
+    return f"{stem or str(item.get('id') or 'communal-bill')}.pdf"
 
 
 def _source_error(error: MyGuichetError) -> SourceError:
@@ -110,6 +148,83 @@ def collect_unseen_communications(
     return unseen
 
 
+def communal_bill_backends(client: MyGuichetClient) -> list[str]:
+    """Return accepted communal-bill backends, falling back to the captured VDL flow."""
+    payload = client.list_communal_bill_consent_status()
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        raise PortalResponseError("Portal response does not contain consent status data.")
+
+    backends: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        origin = row.get("origin")
+        if (
+            isinstance(origin, str)
+            and origin
+            and row.get("consentStatus") == "ACCEPTED"
+            and origin not in seen
+        ):
+            backends.append(origin)
+            seen.add(origin)
+    return backends or [DEFAULT_COMMUNAL_BILL_BACKEND]
+
+
+def collect_communal_bills(
+    client: MyGuichetClient,
+    seen: set[str],
+    *,
+    page_size: int = COMMUNAL_BILLS_PER_PAGE,
+) -> list[tuple[str, dict[str, Any], str]]:
+    """Page through communal bills for all accepted compatible backends."""
+    unseen: list[tuple[str, dict[str, Any], str]] = []
+    collected_ids: set[str] = set()
+    for backend in communal_bill_backends(client):
+        page_number = 1
+        while True:
+            payload = client.list_communal_bills(
+                backend=backend,
+                page_number=page_number,
+                page_size=page_size,
+            )
+            raw_items = payload.get("items")
+            if not isinstance(raw_items, list):
+                raise PortalResponseError(
+                    "Portal response does not contain a communal-bill item list."
+                )
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                bill_id = item.get("id")
+                if (
+                    isinstance(bill_id, str)
+                    and bill_id
+                    and bill_id not in seen
+                    and bill_id not in collected_ids
+                ):
+                    unseen.append((bill_id, item, backend))
+                    collected_ids.add(bill_id)
+
+            page_count = payload.get("pageCount")
+            total_count = payload.get("totalCount")
+            if isinstance(page_count, int):
+                if page_number >= page_count:
+                    break
+            elif isinstance(total_count, int):
+                if page_number * page_size >= total_count:
+                    break
+            elif len(raw_items) < page_size:
+                break
+            if not raw_items:
+                break
+            page_number += 1
+
+    unseen.reverse()
+    return unseen
+
+
 class MyGuichetDocumentSource:
     """Source adapter that plugs the MyGuichet client into the core."""
 
@@ -158,13 +273,28 @@ class MyGuichetDocumentSource:
     ) -> list[SourceMessage]:
         del context
         try:
-            communications = collect_unseen_communications(self._client(account), seen)
+            client = self._client(account)
+            communications = collect_unseen_communications(client, seen)
+            communication_messages = [
+                SourceMessage(id=communication_id, metadata=_message_metadata(metadata))
+                for communication_id, metadata in communications
+            ]
         except MyGuichetError as error:
             raise _source_error(error) from error
-        return [
-            SourceMessage(id=communication_id, metadata=_message_metadata(metadata))
-            for communication_id, metadata in communications
+
+        collected_ids = {message.id for message in communication_messages}
+        try:
+            communal_bills = collect_communal_bills(client, seen | collected_ids)
+        except SessionExpired as error:
+            raise _source_error(error) from error
+        except MyGuichetError as error:
+            print(f"[{account.name}] Could not list communal bills: {error}")
+            communal_bills = []
+        bill_messages = [
+            SourceMessage(id=bill_id, metadata=_communal_bill_metadata(item, backend))
+            for bill_id, item, backend in communal_bills
         ]
+        return communication_messages + bill_messages
 
     def list_documents(
         self,
@@ -173,6 +303,21 @@ class MyGuichetDocumentSource:
         message: SourceMessage,
     ) -> list[SourceDocument]:
         del context
+        if message.metadata.get("kind") == COMMUNAL_BILL_MESSAGE_KIND:
+            item = message.metadata.get("raw")
+            if not isinstance(item, dict):
+                raise SourceResponseError(
+                    f"Communal bill {message.id} has invalid metadata."
+                )
+            return [
+                SourceDocument(
+                    id=message.id,
+                    name=_communal_bill_document_name(item),
+                    content_type=str(item.get("mimeType") or "application/pdf"),
+                    metadata={"bill": item, "backend": message.metadata.get("backend")},
+                )
+            ]
+
         try:
             detail = self._client(account).get_edelivery(message.id)
         except MyGuichetError as error:
@@ -208,8 +353,15 @@ class MyGuichetDocumentSource:
         message: SourceMessage,
         document: SourceDocument,
     ) -> DownloadResponse:
-        del context, message
+        del context
         try:
+            if message.metadata.get("kind") == COMMUNAL_BILL_MESSAGE_KIND:
+                backend = document.metadata.get("backend")
+                if not isinstance(backend, str) or not backend:
+                    raise SourceResponseError(
+                        f"Communal bill {message.id} has no backend metadata."
+                    )
+                return self._client(account).download_communal_bill(document.id, backend)
             return self._client(account).download_document(document.id, document.name)
         except MyGuichetError as error:
             raise _source_error(error) from error

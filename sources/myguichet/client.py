@@ -43,7 +43,7 @@ class MyGuichetClient:
             status=3,
             backoff_factor=0.5,
             status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset({"GET"}),
+            allowed_methods=frozenset({"GET", "POST"}),
             respect_retry_after_header=True,
             raise_on_status=False,
         )
@@ -72,6 +72,36 @@ class MyGuichetClient:
                 allow_redirects=False,
                 timeout=REQUEST_TIMEOUT_SECONDS,
                 stream=stream,
+            )
+        except requests.RequestException as error:
+            raise PortalRequestError(f"Could not retrieve {path}: {error}") from error
+
+        if 300 <= response.status_code < 400 or response.status_code in (401, 403):
+            response.close()
+            raise SessionExpired(
+                f"Session was rejected while requesting {path} (HTTP {response.status_code})."
+            )
+        if response.status_code >= 400:
+            status_code = response.status_code
+            response.close()
+            raise PortalRequestError(
+                f"Portal request {path} failed with HTTP {status_code}."
+            )
+
+        content_type = response.headers.get("Content-Type", "").lower()
+        if "text/html" in content_type:
+            response.close()
+            raise SessionExpired(f"Portal redirected {path} to an HTML login page.")
+        return response
+
+    def _post_json(self, path: str, payload: dict[str, Any]) -> requests.Response:
+        """POST one JSON request to the portal API."""
+        try:
+            response = self.session.post(
+                f"{API_BASE_URL}{path}",
+                json=payload,
+                allow_redirects=False,
+                timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except requests.RequestException as error:
             raise PortalRequestError(f"Could not retrieve {path}: {error}") from error
@@ -137,6 +167,37 @@ class MyGuichetClient:
             spaceId=self.space_id,
             filename=filename,
             isExternal="true",
+        )
+
+    def list_communal_bill_consent_status(self) -> dict[str, Any]:
+        """Return consent status entries for compatible communal-bill backends."""
+        path = f"/exact-source/comfac/v1/{self.space_id}/consent/status"
+        response = self._post_json(path, {})
+        return self._json(response, path)
+
+    def list_communal_bills(
+        self, backend: str, page_number: int, page_size: int
+    ) -> dict[str, Any]:
+        """Return one communal-bill page for one backend."""
+        path = f"/exact-source/comfac/v1/{self.space_id}/documents/"
+        response = self._post_json(
+            path,
+            {
+                "pageNumber": page_number,
+                "pageSize": page_size,
+                "backend": backend,
+            },
+        )
+        return self._json(response, path)
+
+    def download_communal_bill(
+        self, document_id: str, backend: str
+    ) -> requests.Response:
+        """Return a streaming communal-bill PDF response."""
+        return self._get(
+            f"/exact-source/comfac/v1/{self.space_id}/documents-comfac/{document_id}/download",
+            stream=True,
+            backend=backend,
         )
 
     def close(self) -> None:

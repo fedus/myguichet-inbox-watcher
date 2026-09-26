@@ -278,6 +278,14 @@ If the username or password is omitted, an interactive run prompts for the
 missing value without saving it. A scheduler has no interactive terminal, so an
 unattended setup must put both values in `.env`.
 
+Besides eDelivery communications, the MyGuichet source also reads compatible
+communal-bill exact sources, such as Ville de Luxembourg invoices exposed under
+the communal bills section. It discovers accepted communal-bill backends from
+the portal consent status, pages through the lazy-loaded document list, and
+downloads each bill PDF through the authenticated portal API. If the communal
+bill exact source is unavailable for an account, regular MyGuichet inbox
+documents still continue.
+
 ## DKV/Lalux EasyApp Source
 
 The `dkv` source uses the Lalux EasyApp API seen by the web frontend. It
