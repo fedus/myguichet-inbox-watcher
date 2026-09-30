@@ -43,8 +43,10 @@ from sources import register_source  # noqa: E402
 from sources.dkv import (  # noqa: E402
     DkvDocumentSource,
     collect_available_documents,
+    collect_contract_documents,
     collect_invoice_messages,
     collect_treated_refunds,
+    document_from_contract_message,
     document_from_invoice_detail,
     documents_from_refund_detail,
 )
@@ -165,6 +167,8 @@ class FakeDkvAuthClient:
         self.completed_otp = ""
         self.available_documents: list[object] = []
         self.on_demand_documents: list[object] = []
+        self.contracts: list[object] = []
+        self.contract_details: dict[str, dict[str, object]] = {}
         self.invoice_pages: dict[int, dict[str, object]] = {
             0: {
                 "groups": [{"items": []}],
@@ -210,6 +214,12 @@ class FakeDkvAuthClient:
 
     def list_on_demand_documents(self) -> list[object]:
         return self.on_demand_documents
+
+    def list_contracts(self) -> list[object]:
+        return self.contracts
+
+    def get_contract(self, contract_id: str) -> dict[str, object]:
+        return self.contract_details[contract_id]
 
     def list_invoices(self, page_index: int, limit: int) -> dict[str, object]:
         del limit
@@ -1115,6 +1125,54 @@ class WatcherHelpersTest(unittest.TestCase):
         self.assertEqual(document.name, "Invoice September")
         self.assertEqual(document.content_type, "application/pdf")
 
+    def test_dkv_contract_collection_reads_contract_detail_documents(self) -> None:
+        fake_client = FakeDkvAuthClient()
+        fake_client.contracts = [
+            {
+                "typeName": "Health",
+                "contracts": [
+                    {
+                        "contractObjects": [
+                            {"id": "INNOVAS#35769487#702319426#ENCEVOBCA+"}
+                        ]
+                    }
+                ],
+            }
+        ]
+        fake_client.contract_details = {
+            "INNOVAS#35769487#702319426#ENCEVOBCA+": {
+                "title": "THI MAI KHANH FRANCESCA Pham",
+                "subTitle": "ENCEVOBCA+",
+                "listDocument": [
+                    {
+                        "idDocument": "CONT#contract-terms",
+                        "label": "General Terms",
+                        "logo": "pdf_file",
+                    },
+                    {
+                        "label": "External URL only",
+                        "urlDocument": "https://www.lalux.lu/fr/infos-outils/documents?code=DKV9",
+                    },
+                ],
+            }
+        }
+
+        messages = collect_contract_documents(
+            fake_client, seen=set()  # type: ignore[arg-type]
+        )
+        document = document_from_contract_message(messages[0])
+
+        self.assertEqual([message.id for message in messages], ["CONT#contract-terms"])
+        self.assertEqual(messages[0].metadata["kind"], "contract_document")
+        self.assertEqual(messages[0].metadata["category"], "Health")
+        self.assertEqual(
+            messages[0].metadata["subcategory"],
+            "THI MAI KHANH FRANCESCA Pham ENCEVOBCA+",
+        )
+        self.assertEqual(document.id, "CONT#contract-terms")
+        self.assertEqual(document.name, "General Terms")
+        self.assertEqual(document.content_type, "application/pdf")
+
     def test_dkv_source_collects_available_documents_and_downloads_them(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -1164,6 +1222,60 @@ class WatcherHelpersTest(unittest.TestCase):
                 fake_client.downloaded_documents,
                 ["CONT#Clients-624143106-1445889"],
             )
+            response.close()
+
+    def test_dkv_source_collects_contract_documents_and_downloads_them(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            fake_client = FakeDkvAuthClient()
+            fake_client.contracts = [
+                {
+                    "typeName": "Health",
+                    "contracts": [
+                        {
+                            "contractObjects": [
+                                {"id": "INNOVAS#35769487#702319426#ENCEVOBCA+"}
+                            ]
+                        }
+                    ],
+                }
+            ]
+            fake_client.contract_details = {
+                "INNOVAS#35769487#702319426#ENCEVOBCA+": {
+                    "title": "Contract holder",
+                    "subTitle": "ENCEVOBCA+",
+                    "listDocument": [
+                        {
+                            "idDocument": "CONT#contract-terms",
+                            "label": "General Terms",
+                        }
+                    ],
+                }
+            }
+            account = SourceAccountConfig(
+                name="alice_dkv",
+                source="dkv",
+                maximum_document_mb=100,
+                runtime_dir=root,
+                state_file=root / "state.json",
+                lock_file=root / ".run.lock",
+                source_settings={"username": "alice-user", "password": "secret"},
+            )
+            source = DkvDocumentSource(lambda: fake_client)  # type: ignore[arg-type]
+
+            messages = source.collect_unseen(
+                account, SourceContext(StaticInputBroker({"code": "123456"})), seen=set()
+            )
+            documents = source.list_documents(
+                account, SourceContext(CliInputBroker()), messages[0]
+            )
+            response = source.open_document(
+                account, SourceContext(CliInputBroker()), messages[0], documents[0]
+            )
+
+            self.assertEqual([message.id for message in messages], ["CONT#contract-terms"])
+            self.assertEqual(documents[0].name, "General Terms")
+            self.assertEqual(fake_client.downloaded_documents, ["CONT#contract-terms"])
             response.close()
 
     def test_dkv_plugin_requests_sms_otp_and_persists_token(self) -> None:

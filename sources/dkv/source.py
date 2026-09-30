@@ -36,6 +36,7 @@ from storage import atomic_write_text, restrict_file
 TREATED_STATUS_CODE = "TREATED"
 TOKEN_EXPIRY_SKEW_SECONDS = 30
 MESSAGE_KIND_AVAILABLE_DOCUMENT = "available_document"
+MESSAGE_KIND_CONTRACT_DOCUMENT = "contract_document"
 MESSAGE_KIND_INVOICE = "invoice"
 MESSAGE_KIND_REFUND = "refund"
 
@@ -247,6 +248,103 @@ def document_from_available_message(message: SourceMessage) -> SourceDocument:
     )
 
 
+def _contract_name(detail: dict[str, Any], contract_object: dict[str, Any]) -> str:
+    parts = (
+        str(detail.get("title") or "").strip(),
+        str(detail.get("subTitle") or "").strip(),
+        str(contract_object.get("label") or "").strip(),
+    )
+    return " ".join(part for part in parts if part)
+
+
+def _contract_document_metadata(
+    document: dict[str, Any],
+    detail: dict[str, Any],
+    group: dict[str, Any],
+    contract_object: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "subject": document.get("label") or document.get("idDocument") or "Contract document",
+        "kind": MESSAGE_KIND_CONTRACT_DOCUMENT,
+        "category": group.get("typeName") or group.get("label") or "Contracts",
+        "subcategory": _contract_name(detail, contract_object),
+        "raw": {
+            "document": document,
+            "detail": detail,
+            "group": group,
+            "contract_object": contract_object,
+        },
+    }
+
+
+def collect_contract_documents(
+    client: DkvClient, seen: set[str]
+) -> list[SourceMessage]:
+    """Collect downloadable documents attached to contract details."""
+    messages: list[SourceMessage] = []
+    collected_ids: set[str] = set()
+    groups = client.list_contracts()
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        contracts = group.get("contracts")
+        if not isinstance(contracts, list):
+            continue
+        for contract in contracts:
+            if not isinstance(contract, dict):
+                continue
+            contract_objects = contract.get("contractObjects")
+            if not isinstance(contract_objects, list):
+                continue
+            for contract_object in contract_objects:
+                if not isinstance(contract_object, dict):
+                    continue
+                contract_id = contract_object.get("id")
+                if not isinstance(contract_id, str) or not contract_id:
+                    continue
+                detail = client.get_contract(contract_id)
+                documents = detail.get("listDocument")
+                if not isinstance(documents, list):
+                    continue
+                for document in documents:
+                    if not isinstance(document, dict):
+                        continue
+                    document_id = document.get("idDocument")
+                    if (
+                        not isinstance(document_id, str)
+                        or not document_id
+                        or document_id in seen
+                        or document_id in collected_ids
+                    ):
+                        continue
+                    messages.append(
+                        SourceMessage(
+                            id=document_id,
+                            metadata=_contract_document_metadata(
+                                document, detail, group, contract_object
+                            ),
+                        )
+                    )
+                    collected_ids.add(document_id)
+    return messages
+
+
+def document_from_contract_message(message: SourceMessage) -> SourceDocument:
+    raw = message.metadata.get("raw")
+    document = raw.get("document") if isinstance(raw, dict) else None
+    if not isinstance(document, dict):
+        raise SourceResponseError(
+            f"DKV/Lalux EasyApp contract document {message.id!r} is missing metadata."
+        )
+    name = str(document.get("label") or message.id)
+    return SourceDocument(
+        id=message.id,
+        name=name,
+        content_type="application/pdf",
+        metadata=message.metadata,
+    )
+
+
 def collect_invoice_messages(
     client: DkvClient, seen: set[str], page_limit: int
 ) -> list[SourceMessage]:
@@ -443,6 +541,8 @@ class DkvDocumentSource:
                 source_type="on-demand",
             )
             collected_ids.update(message.id for message in on_demand_documents)
+            contract_documents = collect_contract_documents(client, seen | collected_ids)
+            collected_ids.update(message.id for message in contract_documents)
             invoice_messages = collect_invoice_messages(
                 client, seen | collected_ids, dkv_account.page_limit
             )
@@ -452,6 +552,7 @@ class DkvDocumentSource:
             refund_messages
             + available_documents
             + on_demand_documents
+            + contract_documents
             + invoice_messages
         )
 
@@ -466,6 +567,8 @@ class DkvDocumentSource:
             kind = message.metadata.get("kind")
             if kind == MESSAGE_KIND_AVAILABLE_DOCUMENT:
                 return [document_from_available_message(message)]
+            if kind == MESSAGE_KIND_CONTRACT_DOCUMENT:
+                return [document_from_contract_message(message)]
             if kind == MESSAGE_KIND_INVOICE:
                 detail = client.get_invoice(message.id)
                 return [document_from_invoice_detail(message.id, detail)]

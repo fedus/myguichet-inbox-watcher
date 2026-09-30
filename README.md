@@ -291,9 +291,9 @@ documents still continue.
 The `dkv` source uses the Lalux EasyApp API seen by the web frontend. It
 retrieves reimbursements whose status code is `TREATED`; submitted/sent
 reimbursements are intentionally skipped. It also reads the document tab
-categories, such as tax certificates, plus invoice documents when the invoice
-API marks an invoice as having a document. Empty invoice tabs are treated as an
-empty list.
+categories, such as tax certificates, contract-detail documents, and invoice
+documents when the invoice API marks an invoice as having a document. Empty
+invoice tabs are treated as an empty list.
 
 ```dotenv
 DOCUMENT_<USER>_DKV_USERNAME=your-login

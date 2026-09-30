@@ -257,6 +257,15 @@ class DkvClient:
         response = self._get("/documents/on-demand")
         return self._json_list(response, "on-demand documents")
 
+    def list_contracts(self) -> list[Any]:
+        """Return contract groups visible in the contracts area."""
+        response = self._get("/contracts")
+        return self._json_list(response, "contracts")
+
+    def get_contract(self, contract_id: str) -> dict[str, Any]:
+        """Return one contract detail response."""
+        return self._get_json(f"/contracts/{quote(contract_id, safe='')}")
+
     def list_invoices(self, page_index: int, limit: int) -> dict[str, Any]:
         """Return one infinite-scroll page of invoices."""
         response = self._get("/invoices", limit=limit, pageIndex=page_index)
