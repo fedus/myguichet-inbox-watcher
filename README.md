@@ -3,7 +3,7 @@
 This small, unofficial tool checks configured document inboxes, fetches
 documents it has not processed before, and sends those documents to configured
 outputs. It ships with MyGuichet, DKV/Lalux EasyApp, ProSyndic, and Foyer
-source plugins, plus a folder output plugin.
+source plugins, plus folder and rclone output plugins.
 
 MyGuichet uses the normal MyGuichet/LuxTrust login flow: the username and
 password can be entered by Playwright, but the LuxTrust mobile/device approval
@@ -28,6 +28,7 @@ The project is designed for a private macOS or Linux machine with Python 3.10+.
 | `sources/prosyndic/` | ProSyndic source plugin: config, HTTP login/listing/download client, nested-folder adapter. |
 | `outputs/base.py` | Small protocol a document output implements. |
 | `outputs/folder/` | Folder output plugin: path/mode config and atomic local file delivery. |
+| `outputs/rclone/` | Batch output plugin: stages a poll's files and uploads them with rclone. |
 | `mqtt_trigger.py` | Long-running MQTT subscriber that triggers one-account or all-account polling. |
 | `config.py` | Generic `.env` account/source/output wiring. |
 | `storage.py` | Private atomic file writes and a lock that prevents overlapping runs. |
@@ -223,7 +224,7 @@ DOCUMENT_BOB_OTHERSERVICE_OUTPUT_ARCHIVE_TOKEN=bob-api-token
 
 The `example_api` and `otherservice` plugins above are illustrative names; this
 repo currently implements `myguichet`, `dkv`, `prosyndic`, and `foyer` sources
-and the `folder` output.
+and the `folder` and `rclone` outputs.
 
 ## Folder Output
 
@@ -249,6 +250,45 @@ Existing output directories are not chmodded. This matters for Docker bind
 mounts and NFS shares such as a Paperless-ngx consume folder: set the folder
 permissions/ownership on the host, then choose a downloaded file mode that the
 consumer can read.
+
+## rclone Output
+
+The rclone output copies all files retrieved during one poll as a batch. It uses
+`rclone copy`, keeping its private local batch until the watcher has checkpointed
+the successfully handled messages. The batch is then removed. If rclone fails,
+the messages are left uncheckpointed so the source can return them on a later
+poll.
+
+Configure the WebDAV remote and its credentials in rclone's own config file.
+Keep that file private and out of Git; point the output at the remote alias and
+path defined in it:
+
+```dotenv
+DOCUMENT_ALICE_MYGUICHET_OUTPUTS=cloud:rclone
+DOCUMENT_OUTPUT_RCLONE_CONFIG_FILE=/run/rclone/rclone.conf
+DOCUMENT_ALICE_MYGUICHET_OUTPUT_CLOUD_REMOTE=franci-myguichet-inbox:
+```
+
+The destination setting is the complete rclone destination, so subdirectories
+can be included, for example `franci-myguichet-inbox:documents/alice`. The
+config file path is an output-type default; set it once for all rclone outputs
+or override it for a named output with
+`DOCUMENT_<USER>_<SOURCE>_OUTPUT_<NAME>_CONFIG_FILE`. The Docker image includes
+the rclone executable. Mount the host config read-only at the configured path,
+for example in `docker-compose.override.yml`:
+
+```yaml
+services:
+  document-watcher:
+    volumes:
+      - /home/federico/.config/rclone/rclone.conf:/run/rclone/rclone.conf:ro
+```
+
+The config file should be readable by the container user and should have
+restrictive permissions on the host. Optional settings are `BINARY` (defaults
+to `rclone`), `RETRIES` (5), `LOW_LEVEL_RETRIES` (10), `TIMEOUT_SECONDS`
+(1800), and `LOG_LEVEL` (`INFO`). `--min-age` is not used because each staged
+file is complete before the batch is uploaded.
 
 ## MyGuichet Source
 

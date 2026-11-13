@@ -48,6 +48,8 @@ def _register_built_ins() -> None:
     if _BUILT_INS_REGISTERED:
         return
     from outputs.folder import FolderOutput
+    from outputs.rclone import RcloneOutput
 
     register_output("folder", FolderOutput)
+    register_output("rclone", RcloneOutput)
     _BUILT_INS_REGISTERED = True
