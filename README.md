@@ -543,8 +543,18 @@ publishing themselves. A successful account poll ends with:
 
 Errors use the same shape with `"status":"error"` plus `error_type` and
 `error_message`. The runner also emits `poll.queued`, `poll.started`,
-`input.accepted`, and rejected-trigger/input events. When a source opens an
-external-input challenge, the runner emits:
+`poll.progress`, `message.failed`, `input.accepted`, and rejected-trigger/input
+events. Progress events include phases such as `connecting_to_source`,
+`waiting_for_authentication`, `checking_inbox`, `processing_messages`, and
+`finalizing_outputs`. During message processing, progress includes completed,
+total, current, and failed message counts. The dashboard renders that phase as
+a determinate message-count bar; batch output finalization is a separate phase.
+LuxTrust approval and code-based OTP both use the authentication-waiting phase,
+with the message identifying the method. Individual output failures are
+published as `message.failed` with the underlying error, while a failed batch
+finalization is reported in the terminal `poll.finished` error. The dashboard
+shows the current phase beside each active account and includes these events in
+its live log. When a source opens an external-input challenge, the runner emits:
 
 ```json
 {

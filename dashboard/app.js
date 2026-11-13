@@ -28,6 +28,7 @@ const THEME_STORAGE_KEY = "documentWatcherTheme";
 const THEMES = new Set(["default", "modern", "cyber", "cli", "win95"]);
 let latestAccounts = [];
 let latestEvents = [];
+let latestRuntimeStatus = null;
 let latestService = null;
 let selectedService = "http";
 let selectedLogFilter = "all";
@@ -334,7 +335,53 @@ function connectEventStream() {
     $("logLiveState").classList.remove("is-live");
   };
   eventStream.addEventListener("runtime", (message) => {
-    mergeEvents([JSON.parse(message.data)]);
+    const event = JSON.parse(message.data);
+    mergeEvents([event]);
+    if (event.event === "poll.started" && latestRuntimeStatus) {
+      latestRuntimeStatus.active_polls = latestRuntimeStatus.active_polls.filter(
+        (item) => item.account !== event.account
+      );
+      latestRuntimeStatus.active_polls.push({
+        account: event.account,
+        source: event.source,
+        started_at: event.timestamp,
+        status: "running",
+        phase: "starting",
+        message: "Poll started.",
+      });
+      $("activeCount").textContent = latestRuntimeStatus.active_polls.length;
+      renderRuntime(latestRuntimeStatus);
+    } else if (event.event === "poll.finished" && latestRuntimeStatus) {
+      latestRuntimeStatus.active_polls = latestRuntimeStatus.active_polls.filter(
+        (item) => item.account !== event.account
+      );
+      latestRuntimeStatus.pending_inputs = latestRuntimeStatus.pending_inputs.filter(
+        (item) => item.account !== event.account
+      );
+      $("activeCount").textContent = latestRuntimeStatus.active_polls.length;
+      $("inputCount").textContent = latestRuntimeStatus.pending_inputs.length;
+      renderRuntime(latestRuntimeStatus);
+    } else if (event.event === "poll.progress" && latestRuntimeStatus) {
+      const poll = latestRuntimeStatus.active_polls.find(
+        (item) => item.account === event.account
+      );
+      if (poll) {
+        poll.status = event.status;
+        poll.phase = (event.details || {}).phase;
+        poll.message = event.message;
+        const details = event.details || {};
+        if (Number(details.total_messages) > 0) {
+          poll.progress = {
+            total_messages: Number(details.total_messages),
+            completed_messages: Number(details.completed_messages || 0),
+            failed_messages: Number(details.failed_messages || 0),
+          };
+        } else {
+          delete poll.progress;
+        }
+        renderRuntime(latestRuntimeStatus);
+      }
+    }
     renderLog();
   });
 }
@@ -342,10 +389,31 @@ function connectEventStream() {
 function renderRuntime(status) {
   const runtimeItems = [
     ...status.active_polls.map(
-      (poll) =>
-        `<div><span class="${cls("running")}">running</span> <code>${html(
+      (poll) => {
+        const pollStatus = poll.status || "running";
+        const progress = poll.progress || {};
+        const totalMessages = Number(progress.total_messages || 0);
+        const completedMessages = Number(progress.completed_messages || 0);
+        const failedMessages = Number(progress.failed_messages || 0);
+        const messageProgress =
+          poll.phase === "processing_messages" && totalMessages > 0
+            ? `<div class="message-progress"><progress max="${totalMessages}" value="${Math.min(
+                completedMessages,
+                totalMessages
+              )}" aria-label="Message processing progress"></progress><span class="muted">${completedMessages} of ${totalMessages} messages${
+                failedMessages ? ` · ${failedMessages} failed` : ""
+              }</span></div>`
+            : "";
+        return `<div><span class="${cls(pollStatus)}">${html(
+          pollStatus
+        )}</span> <code>${html(
           poll.account
-        )}</code><div class="muted">since ${html(poll.started_at)}</div></div>`
+        )}</code><div><strong>${html(
+          (poll.phase || "working").replace(/_/g, " ")
+        )}</strong></div><div class="muted">${html(
+          poll.message || `since ${poll.started_at}`
+        )}</div>${messageProgress}</div>`
+      }
     ),
     ...status.pending_inputs.map(
       (input) =>
@@ -492,6 +560,7 @@ async function loadData() {
       fetchJson("/api/service"),
     ]);
     latestAccounts = accounts;
+    latestRuntimeStatus = status;
     latestService = service;
     const lastPoll = lastPollFrom(status);
     const lastPollDocuments =

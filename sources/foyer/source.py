@@ -457,10 +457,12 @@ class FoyerDocumentSource:
     def collect_unseen(
         self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
     ) -> list[SourceMessage]:
-        del context
         foyer_account = self._account(account)
         try:
             client = self._authenticated_client(account)
+            context.report_progress(
+                account, "checking_inbox", "Checking Foyer customer documents."
+            )
             profile = client.user_profile()
             documents = collect_foyer_documents(
                 client,

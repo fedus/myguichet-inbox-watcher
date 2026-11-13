@@ -521,6 +521,9 @@ class DkvDocumentSource:
         dkv_account = self._account(account)
         try:
             client = self._authenticated_client(account, context)
+            context.report_progress(
+                account, "checking_inbox", "Checking DKV/Lalux documents."
+            )
             refunds = collect_treated_refunds(
                 client, seen, dkv_account.page_limit
             )

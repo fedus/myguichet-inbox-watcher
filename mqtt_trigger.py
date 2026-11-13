@@ -407,6 +407,7 @@ def worker(
                     input_broker=input_broker,
                     runtime_state=runtime_state,
                     mode=mode,
+                    status_callback=lambda event: publish_status(client, event),
                 )
             except AlreadyRunning as error:
                 print(f"[{account.name}] {error}")

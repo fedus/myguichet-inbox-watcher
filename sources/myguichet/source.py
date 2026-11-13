@@ -239,30 +239,50 @@ class MyGuichetDocumentSource:
             self.myguichet_account = myguichet_account_from_source(account)
         return self.myguichet_account
 
-    def _load_cookie(self, account: MyGuichetAccountConfig) -> str:
+    def _load_cookie(
+        self,
+        account: MyGuichetAccountConfig,
+        context: SourceContext | None = None,
+        source_account: SourceAccountConfig | None = None,
+    ) -> str:
         if account.cookie_file.exists():
             restrict_file(account.cookie_file)
             cookie = account.cookie_file.read_text(encoding="utf-8").strip()
             if cookie:
                 return cookie
         print(f"[{account.name}] No usable session cookie found; starting LuxTrust login.")
-        return self._refresh_cookie(account)
+        return self._refresh_cookie(account, context, source_account)
 
-    def _client(self, account: SourceAccountConfig) -> MyGuichetClient:
+    def _client(
+        self, account: SourceAccountConfig, context: SourceContext | None = None
+    ) -> MyGuichetClient:
         myguichet_account = self._account(account)
         if self.client is None:
             self.client = MyGuichetClient(
-                self._load_cookie(myguichet_account),
+                self._load_cookie(myguichet_account, context, account),
                 myguichet_account.space_id,
                 myguichet_account.language,
             )
         return self.client
 
-    def _refresh_cookie(self, account: MyGuichetAccountConfig) -> str:
+    def _refresh_cookie(
+        self,
+        account: MyGuichetAccountConfig,
+        context: SourceContext | None = None,
+        source_account: SourceAccountConfig | None = None,
+    ) -> str:
         from sources.myguichet.login import LoginError, refresh_cookie
 
         try:
-            return refresh_cookie(account)
+            callback = None
+            if context is not None and source_account is not None:
+                callback = lambda phase, message, status: context.report_progress(
+                    source_account,
+                    phase,
+                    message,
+                    status=status,
+                )
+            return refresh_cookie(account, progress_callback=callback)
         except LoginError as error:
             raise SourceError(
                 f"Could not refresh the MyGuichet session for {account.name}: {error}"
@@ -271,9 +291,11 @@ class MyGuichetDocumentSource:
     def collect_unseen(
         self, account: SourceAccountConfig, context: SourceContext, seen: set[str]
     ) -> list[SourceMessage]:
-        del context
         try:
-            client = self._client(account)
+            client = self._client(account, context)
+            context.report_progress(
+                account, "checking_inbox", "Checking the MyGuichet inbox."
+            )
             communications = collect_unseen_communications(client, seen)
             communication_messages = [
                 SourceMessage(id=communication_id, metadata=_message_metadata(metadata))
@@ -302,7 +324,6 @@ class MyGuichetDocumentSource:
         context: SourceContext,
         message: SourceMessage,
     ) -> list[SourceDocument]:
-        del context
         if message.metadata.get("kind") == COMMUNAL_BILL_MESSAGE_KIND:
             item = message.metadata.get("raw")
             if not isinstance(item, dict):
@@ -319,7 +340,7 @@ class MyGuichetDocumentSource:
             ]
 
         try:
-            detail = self._client(account).get_edelivery(message.id)
+            detail = self._client(account, context).get_edelivery(message.id)
         except MyGuichetError as error:
             raise _source_error(error) from error
 
@@ -353,7 +374,6 @@ class MyGuichetDocumentSource:
         message: SourceMessage,
         document: SourceDocument,
     ) -> DownloadResponse:
-        del context
         try:
             if message.metadata.get("kind") == COMMUNAL_BILL_MESSAGE_KIND:
                 backend = document.metadata.get("backend")
@@ -361,17 +381,16 @@ class MyGuichetDocumentSource:
                     raise SourceResponseError(
                         f"Communal bill {message.id} has no backend metadata."
                     )
-                return self._client(account).download_communal_bill(document.id, backend)
-            return self._client(account).download_document(document.id, document.name)
+                return self._client(account, context).download_communal_bill(document.id, backend)
+            return self._client(account, context).download_document(document.id, document.name)
         except MyGuichetError as error:
             raise _source_error(error) from error
 
     def refresh_authentication(
         self, account: SourceAccountConfig, context: SourceContext
     ) -> None:
-        del context
         self.close()
-        self._refresh_cookie(self._account(account))
+        self._refresh_cookie(self._account(account), context, account)
 
     def close(self) -> None:
         if self.client is not None:

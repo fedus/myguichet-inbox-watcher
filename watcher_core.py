@@ -601,6 +601,7 @@ def run_poll(
     prepare_private_directory(account.runtime_dir)
     state = load_state(account)
     seen = set(state["seen_ids"])
+    context.report_progress(account, "connecting_to_source", "Connecting to source.")
     messages = source.collect_unseen(account, context, seen)
     if not messages:
         update_last_poll_state(
@@ -645,6 +646,18 @@ def run_poll(
     defer_checkpoints = has_batch_finalizers(outputs)
     try:
         begin_outputs(account, outputs)
+        context.report_progress(
+            account,
+            "processing_messages",
+            f"Processing message 1 of {len(messages)}.",
+            progress={
+                "completed_messages": 0,
+                "total_messages": len(messages),
+                "current_message": 1,
+                "failed_messages": 0,
+            },
+        )
+        completed_messages = 0
         for message in messages:
             try:
                 message_documents = download_documents(
@@ -657,19 +670,37 @@ def run_poll(
                     f"[{account.name}] Message {message.id} failed: {error}",
                     file=sys.stderr,
                 )
-                if context.runtime_state is not None:
-                    context.runtime_state.record_event(
-                        "message.failed",
-                        "error",
-                        account=account.name,
-                        source=account.source,
-                        message=str(error),
-                        details={
-                            "message_id": message.id,
-                            "error_type": type(error).__name__,
-                        },
-                    )
+                context.report_event(
+                    "message.failed",
+                    "error",
+                    account=account,
+                    message=str(error),
+                    details={
+                        "message_id": message.id,
+                        "error_type": type(error).__name__,
+                    },
+                )
                 failed_messages += 1
+                completed_messages += 1
+                context.report_progress(
+                    account,
+                    "processing_messages",
+                    (
+                        f"Processing message {completed_messages + 1} of "
+                        f"{len(messages)}."
+                        if completed_messages < len(messages)
+                        else f"Processed all {len(messages)} message(s)."
+                    )
+                    + (f" {failed_messages} failed." if failed_messages else ""),
+                    progress={
+                        "completed_messages": completed_messages,
+                        "total_messages": len(messages),
+                        "current_message": min(
+                            completed_messages + 1, len(messages)
+                        ),
+                        "failed_messages": failed_messages,
+                    },
+                )
                 continue
 
             seen.add(message.id)
@@ -685,11 +716,36 @@ def run_poll(
                 f"[{account.name}] Processed message {message.id} "
                 f"({document_count} document(s))."
             )
+            completed_messages += 1
+            context.report_progress(
+                account,
+                "processing_messages",
+                (
+                    f"Processing message {completed_messages + 1} of "
+                    f"{len(messages)}."
+                    if completed_messages < len(messages)
+                    else f"Processed all {len(messages)} message(s)."
+                )
+                + (f" {failed_messages} failed." if failed_messages else ""),
+                progress={
+                    "completed_messages": completed_messages,
+                    "total_messages": len(messages),
+                    "current_message": min(
+                        completed_messages + 1, len(messages)
+                    ),
+                    "failed_messages": failed_messages,
+                },
+            )
 
         result = OutputPollResult(
             processed_messages=processed,
             delivered_documents=delivered_count,
             failed_messages=failed_messages,
+        )
+        context.report_progress(
+            account,
+            "finalizing_outputs",
+            "Finalizing configured outputs.",
         )
         end_outputs(account, outputs, result)
         if processed or not failed_messages:
@@ -718,9 +774,12 @@ def poll_account(
     input_broker: InputBroker | None = None,
     runtime_state: Any | None = None,
     mode: str | PollMode = PollMode.NORMAL,
+    status_callback: Any | None = None,
 ) -> int:
     """Poll one account with locking and one expired-session refresh."""
-    context = SourceContext(input_broker or CliInputBroker(), runtime_state)
+    context = SourceContext(
+        input_broker or CliInputBroker(), runtime_state, status_callback
+    )
     resolved_mode = poll_mode(mode)
     with exclusive_lock(account.lock_file):
         source = create_source(account.source)

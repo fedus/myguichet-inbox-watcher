@@ -7,7 +7,7 @@ import getpass
 import re
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from playwright.sync_api import Error as PlaywrightError
@@ -183,6 +183,7 @@ def start_luxtrust_login(page: Page, username: str, password: str) -> None:
 def refresh_cookie(
     account: MyGuichetAccountConfig | None = None,
     config_provider: ConfigProvider | None = None,
+    progress_callback: Callable[[str, str, str], None] | None = None,
 ) -> str:
     """Log in if needed, write cookie.txt atomically, and return its value."""
     provider = config_provider or EnvConfigProvider()
@@ -195,6 +196,10 @@ def refresh_cookie(
     url = portal_url(account.language)
     prepare_private_directory(account.runtime_dir)
     prepare_private_directory(account.profile_dir)
+
+    def report(phase: str, message: str, status: str = "running") -> None:
+        if progress_callback is not None:
+            progress_callback(phase, message, status)
 
     try:
         with sync_playwright() as playwright:
@@ -213,8 +218,14 @@ def refresh_cookie(
                 if "fpgun-iep-front" in page.url and "TAMLoginServlet" not in page.url:
                     cookie_header = session_cookie_header(context, account.language)
                 if not cookie_header:
+                    report("authenticating", "Starting LuxTrust sign-in.")
                     username, password = load_luxtrust_credentials(account)
                     start_luxtrust_login(page, username, password)
+                    report(
+                        "waiting_for_authentication",
+                        "Waiting for LuxTrust mobile approval.",
+                        "waiting",
+                    )
                     print(
                         f"[{account.name}] LuxTrust credentials submitted. "
                         "Approve the request on your device."
@@ -228,6 +239,7 @@ def refresh_cookie(
                         "The browser did not expose an authenticated MyGuichet session cookie."
                     )
                 atomic_write_text(account.cookie_file, cookie_header + "\n")
+                report("authenticated", "MyGuichet session is ready.")
                 print(f"[{account.name}] Authenticated session saved to cookie.txt.")
                 return cookie_header
             finally:

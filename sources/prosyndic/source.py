@@ -239,8 +239,12 @@ class ProSyndicDocumentSource:
     ) -> list[SourceMessage]:
         prosyndic_account = self._account(account)
         try:
+            client = self._authenticated_client(account, context)
+            context.report_progress(
+                account, "checking_inbox", "Checking ProSyndic folders."
+            )
             documents = collect_documents(
-                self._authenticated_client(account, context),
+                client,
                 page_limit=prosyndic_account.page_limit,
             )
         except ProSyndicError as error:

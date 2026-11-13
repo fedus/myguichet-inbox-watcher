@@ -75,6 +75,9 @@ class RuntimeState:
                 "source": source,
                 "mode": mode,
                 "started_at": started_at,
+                "status": "running",
+                "phase": "starting",
+                "message": "Poll started.",
                 "documents": [],
             }
         self.record_event(
@@ -83,6 +86,38 @@ class RuntimeState:
             account=account,
             source=source,
             details={"mode": mode},
+        )
+
+    def poll_progress(
+        self,
+        account: str,
+        source: str,
+        phase: str,
+        status: str = "running",
+        message: str = "",
+        progress: dict[str, int] | None = None,
+    ) -> None:
+        """Update and publish the current phase of one active poll."""
+        with self._condition:
+            poll = self._active_polls.get(account)
+            if poll is not None:
+                poll["status"] = status
+                poll["phase"] = phase
+                poll["message"] = message
+                if progress is None:
+                    poll.pop("progress", None)
+                else:
+                    poll["progress"] = dict(progress)
+        details: dict[str, Any] = {"phase": phase}
+        if progress is not None:
+            details.update(progress)
+        self.record_event(
+            "poll.progress",
+            status,
+            account=account,
+            source=source,
+            message=message,
+            details=details,
         )
 
     def document_delivered(
